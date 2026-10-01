@@ -26,7 +26,7 @@ import AppKit
         dot.contentView = circle
     }
 
-    static func clickThroughPanel() -> NSPanel {
+    public static func clickThroughPanel() -> NSPanel {
         let p = NSPanel(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: true)
         p.level = .statusBar
         p.ignoresMouseEvents = true

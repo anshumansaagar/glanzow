@@ -11,6 +11,7 @@ let package = Package(
     targets: [
         .target(name: "GlanzowKit", path: "Glanzow", exclude: ["App"]),
         .executableTarget(name: "Glanzow", dependencies: ["GlanzowKit"], path: "Glanzow/App"),
+        .executableTarget(name: "ReplayCLI", dependencies: ["GlanzowKit"], path: "ReplayCLI"),
         .testTarget(name: "GlanzowTests", dependencies: ["GlanzowKit"], path: "GlanzowTests"),
     ]
 )

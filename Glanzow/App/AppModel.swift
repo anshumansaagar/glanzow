@@ -55,6 +55,14 @@ import GlanzowKit
     private(set) var classifier = MahalanobisClassifier(models: [])
     private var promptedFor: Set<DisplayKey> = []
     lazy var camera = CameraCapture(tracker: tracker)
+    let input = EventTapInputMonitor()
+    let windows = WindowTracker(displays: .shared)
+    private(set) lazy var focusManager = FocusManager(windows: windows, displays: registry, input: input)
+    private(set) lazy var controller = SwitchController(
+        classifier: classifier, tuning: Tuning(defaults), focus: focusManager, input: input,
+        systemBlock: { [focusManager] in await focusManager.blockingReason() })
+    private let feedback = FocusFeedback()
+    private let eventLog = EventLog()
     private let recorder = PoseRecorder()
     private let log = logger("app")
     private var menu: MenuBarController?
@@ -62,8 +70,12 @@ import GlanzowKit
     private var settingsWindow: NSWindow?
     private var settingsShowsDebug = false
     private var debugOverlay: DebugOverlay?
-    private var axPoll: Timer?
+    private var permissionPoll: Timer?
     private var cameraWanted = false
+    private var switchingEnabled = true // first reconcile pushes the real value
+    private var monitorsStarted = false
+    private var lastSwitchAt = -Double.infinity
+    private var snapshot: SwitchController.Snapshot?
     private var preferredCamera: String?
     private var lastSample: PoseSample?
     private var lastFaceTime = -Double.infinity
@@ -90,6 +102,13 @@ import GlanzowKit
         tasks.append(Task { [weak self] in
             for await e in poses { self?.handlePose(e) }
         })
+        // The hot path: frames → decisions, off the main thread.
+        let decisions = tracker.events()
+        let controller = controller
+        tasks.append(Task.detached {
+            for await e in decisions { await controller.handle(e) }
+        })
+        wireCallbacks()
         applySettings()
         refreshPermissions()
         if !defaults.bool(forKey: Pref.onboardingDone) { showOnboarding() }
@@ -101,6 +120,41 @@ import GlanzowKit
         tasks.forEach { $0.cancel() }
     }
 
+    private func wireCallbacks() {
+        let controller = controller, focusManager = focusManager, windows = windows
+        Task { [weak self] in
+            guard self != nil else { return }
+            await controller.setOnSwitch { [weak self] r in Task { @MainActor in self?.didSwitch(r) } }
+            await focusManager.setCallbacks(
+                onFocused: { [weak self] rect in Task { @MainActor in self?.focused(rect) } },
+                onAXDisabled: { [weak self] in Task { @MainActor in self?.accessibilityLost() } })
+            await windows.setCallbacks(
+                onFocus: { [weak self] key, ref in
+                    // A window-less app keeps the last display as current (switch less).
+                    if let key { Task { await controller.setCurrent(key) } }
+                    let frame = ref?.frame
+                    Task { @MainActor in self?.focusChanged(key, frame) }
+                },
+                onAXDisabled: { [weak self] in Task { @MainActor in self?.accessibilityLost() } })
+        }
+        input.onClick = { [weak self] click in self?.clicked(click) }
+        input.onConfirm = { t in Task { await controller.confirm(at: t) } }
+        input.onActivity = { [recorder] kind, t in recorder.record(kind, at: t) }
+    }
+
+    /// Window tracking and the input tap need Accessibility; start them once it is granted.
+    private func startMonitors() {
+        guard axTrusted else { return }
+        if !monitorsStarted {
+            monitorsStarted = true
+            windows.start()
+        }
+        if !input.isRunning {
+            inputOK = input.start()
+            if !inputOK { log.error("event tap unavailable; Input Monitoring needed") }
+        }
+    }
+
     // MARK: State
 
     /// Brings the camera and status in line with permissions, pauses and calibration.
@@ -109,6 +163,14 @@ import GlanzowKit
         if wantCamera != cameraWanted {
             cameraWanted = wantCamera
             if wantCamera { camera.start(preferredID: preferredCamera) } else { camera.stop() }
+        }
+        let running: Bool = { if case .running = cameraState { return true }; return false }()
+        let wantSwitching = cameraWanted && running && permissionsGranted && !calibrating && uncalibrated.isEmpty
+            && !classifier.keys.isEmpty && defaults.bool(forKey: Pref.onboardingDone)
+        if wantSwitching != switchingEnabled {
+            switchingEnabled = wantSwitching
+            log.info("switching \(wantSwitching ? "on" : "off", privacy: .public)")
+            Task { await controller.setPaused(!switchingEnabled) } // reads the latest value when it runs
         }
         status = computeStatus()
     }
@@ -135,6 +197,12 @@ import GlanzowKit
     /// Re-reads settings after any UserDefaults change; cheap and idempotent.
     private func applySettings() {
         tracker.configure(smoothing: SmoothingParams(defaults), trackPupils: defaults.bool(forKey: Pref.trackPupils))
+        let tuning = Tuning(defaults)
+        Task { await controller.update(tuning: tuning) }
+        if tuning.rejectThreshold != classifier.rejectThreshold || tuning.hysteresisFactor != classifier.hysteresisFactor {
+            rebuildModels()
+        }
+        if !defaults.bool(forKey: Pref.showActiveBorder) { feedback.showActive(nil) }
         let preferred = defaults.string(forKey: Pref.cameraID).flatMap { $0.isEmpty ? nil : $0 }
         if preferred != preferredCamera {
             preferredCamera = preferred
@@ -159,7 +227,15 @@ import GlanzowKit
         case .noFace(let t):
             if t - lastFaceTime >= 1 { setFaceVisible(false) } // FR-TRK-06
         }
-        if let debugOverlay { debugOverlay.update(debugText(), gaze: nil) }
+        if let debugOverlay {
+            let gaze = lastSample.flatMap { s -> CGPoint? in
+                guard faceVisible, case .candidate(let key) = classifier.classify(s, current: nil),
+                      let d = registry.display(key) else { return nil }
+                return CGPoint(x: d.bounds.midX, y: d.bounds.midY)
+            }
+            debugOverlay.update(debugText(), gaze: gaze)
+            Task { snapshot = await controller.snapshot() }
+        }
     }
 
     private func setFaceVisible(_ v: Bool) {
@@ -178,6 +254,25 @@ import GlanzowKit
         } else {
             lines.append("no face")
         }
+        if let s = lastSample, faceVisible {
+            let names = Dictionary(displays.map { ($0.key, $0.name) }, uniquingKeysWith: { a, _ in a })
+            let d = classifier.distances(s).map { "\(names[$0.key] ?? $0.key) \(String(format: "%.2f", $0.distance))" }
+            lines.append("distance " + (d.isEmpty ? "no calibration" : d.joined(separator: "  ")))
+        }
+        if let snap = snapshot {
+            let names = Dictionary(displays.map { ($0.key, $0.name) }, uniquingKeysWith: { a, _ in a })
+            func name(_ k: DisplayKey?) -> String { k.map { names[$0] ?? $0 } ?? "—" }
+            let c: String
+            switch snap.classification {
+            case .candidate(let k)?: c = name(k)
+            case .stay?: c = "stay"
+            case .offScreen?: c = "off-screen"
+            case nil: c = "—"
+            }
+            lines.append("class \(c)  current \(name(snap.current))  pending \(name(snap.pending))")
+            lines.append("guards typing \(snap.typingGuard ? "ON" : "off")  mouse \(snap.mouseGuard ? "ON" : "off")  \(snap.paused ? "PAUSED" : "")")
+            if let b = snap.blockedBy { lines.append("blocked by \(b)") }
+        }
         if case .running(_, let name) = cameraState { lines.append("camera \(name)") }
         return lines.joined(separator: "\n")
     }
@@ -193,7 +288,7 @@ import GlanzowKit
                 log.error("recording: \(error.localizedDescription, privacy: .public)")
             }
         } else {
-            recorder.start(cameraID: cameraID, models: [])
+            recorder.start(cameraID: cameraID, models: store.valid(for: displays, cameraID: cameraID))
             tracker.setRawTap { [recorder] e in recorder.record(e) }
         }
         isRecording = recorder.isRecording
@@ -215,6 +310,47 @@ import GlanzowKit
                                            rejectThreshold: tuning.rejectThreshold, hysteresisFactor: tuning.hysteresisFactor)
         // Until the camera runs we cannot tell which camera's calibration applies.
         uncalibrated = cameraID.isEmpty ? [] : store.uncalibrated(displays, cameraID: cameraID)
+        let c = classifier
+        Task { await controller.update(classifier: c) }
+    }
+
+    // MARK: Switch feedback and logging
+
+    private func didSwitch(_ r: SwitchRecord) {
+        let t = now()
+        var fields: [String: Any] = ["to": r.to, "from": r.from ?? "", "settleToFocusMs": Int((t - r.pendingSince) * 1000),
+                                     "frameToFocusMs": Int((t - r.time) * 1000), "focusMs": Int(r.focusDuration * 1000)]
+        switch r.outcome {
+        case .focusedWindow: fields["outcome"] = "window"
+        case .pointerOnly: fields["outcome"] = "pointer"
+        case .skipped(let why): fields["outcome"] = "skipped"; fields["reason"] = why
+        }
+        eventLog.append("switch", fields) // NFR-01 latency, NFR-03 review
+        if case .skipped = r.outcome { return }
+        lastSwitchAt = r.time
+        log.info("switch → \(r.to, privacy: .public) settle-to-focus \(Int((t - r.pendingSince) * 1000)) ms")
+    }
+
+    private func focused(_ rect: CGRect) {
+        if defaults.bool(forKey: Pref.flashOnSwitch) { feedback.flash(rect) } // FR-UI-03
+    }
+
+    private func focusChanged(_ key: DisplayKey?, _ frame: CGRect?) {
+        if defaults.bool(forKey: Pref.showActiveBorder) { feedback.showActive(frame) } // FR-UI-05
+        // Replays should see the user's focus changes, not echoes of our own switches.
+        if let key, now() - lastSwitchAt > 0.5 { recorder.record(.focus, at: now(), display: key) }
+    }
+
+    private func clicked(_ click: EventTapInputMonitor.Click) {
+        let key = registry.display(at: click.location)?.key
+        recorder.record(.click, at: click.time, display: key)
+    }
+
+    /// §7: Accessibility revoked — show "Needs permission" and wait for it to come back.
+    private func accessibilityLost() {
+        guard axTrusted else { return }
+        log.error("Accessibility revoked")
+        refreshPermissions()
     }
 
     private func promptIfUncalibrated() {
@@ -243,7 +379,8 @@ import GlanzowKit
         cameraAuthorized = cam == .authorized
         cameraDenied = cam == .denied || cam == .restricted
         axTrusted = AXIsProcessTrusted()
-        if !axTrusted { startAXPolling() }
+        startMonitors()
+        if !permissionsGranted { startPermissionPolling() }
         reconcile()
     }
 
@@ -254,18 +391,23 @@ import GlanzowKit
 
     func requestAccessibility() {
         _ = AXIsProcessTrustedWithOptions(["AXTrustedCheckOptionPrompt": true] as CFDictionary)
-        startAXPolling()
+        startPermissionPolling()
     }
 
-    /// Polls every second until Accessibility is granted, then advances on its own.
-    private func startAXPolling() {
-        guard axPoll == nil else { return }
-        axPoll = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
+    /// FR-ONB-03: polls every second until Accessibility (and, if the tap needs it, Input
+    /// Monitoring) is granted, so onboarding advances on its own.
+    private func startPermissionPolling() {
+        guard permissionPoll == nil else { return }
+        permissionPoll = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated {
-                guard let self, AXIsProcessTrusted() else { return }
-                self.axPoll?.invalidate()
-                self.axPoll = nil
+                guard let self else { return }
+                let ax = AXIsProcessTrusted()
+                guard ax != self.axTrusted || (ax && !self.inputOK) else { return }
                 self.refreshPermissions()
+                if self.permissionsGranted {
+                    self.permissionPoll?.invalidate()
+                    self.permissionPoll = nil
+                }
             }
         }
     }
