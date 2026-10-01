@@ -4,6 +4,9 @@ import os
 
 /// FR-FOC-02: remembers the window the user last focused on each display, by watching app
 /// activation (NSWorkspace) and focused-window changes (AXObserver).
+// ponytail: one memory per display, not per (display, Space); there is no public Space ID API.
+// A remembered window on a hidden Space falls back to FR-FOC-03, as §7 asks. Per-Space memory
+// would need the private CGS Space calls.
 @AXActor public final class WindowTracker {
     public private(set) var lastFocused: [DisplayKey: WindowRef] = [:]
     public private(set) var focused: WindowRef?

@@ -83,6 +83,9 @@ import GlanzowKit
     private var monitorsStarted = false
     private var lastSwitchAt = -Double.infinity
     private var snapshot: SwitchController.Snapshot?
+    private var learning = LearningEngine()
+    private var governor = FrameRateGovernor()
+    private var saveScheduled = false
     private var preferredCamera: String?
     private var lastSample: PoseSample?
     private var lastFaceTime = -Double.infinity
@@ -127,6 +130,7 @@ import GlanzowKit
     }
 
     func shutdown() {
+        store.save()
         camera.stop()
         tasks.forEach { $0.cancel() }
     }
@@ -177,6 +181,8 @@ import GlanzowKit
             if wantCamera { camera.start(preferredID: preferredCamera) } else { camera.stop() }
         }
         let running: Bool = { if case .running = cameraState { return true }; return false }()
+        // SPEC: FR-CAL-07 says pause and prompt. Switching stays off until every connected display
+        // is calibrated: looking at an unknown display would otherwise read as its neighbour.
         let wantSwitching = cameraWanted && running && permissionsGranted && !calibrating && uncalibrated.isEmpty
             && !classifier.keys.isEmpty && defaults.bool(forKey: Pref.onboardingDone)
         if wantSwitching != switchingEnabled {
@@ -252,6 +258,11 @@ import GlanzowKit
     // MARK: Pose pipeline (main-thread consumers; the hot path runs elsewhere)
 
     private func handlePose(_ e: PoseEvent) {
+        learning.observe(e)
+        if let fps = governor.update(e) { // FR-TRK-08
+            log.info("frame rate \(fps) fps")
+            camera.setFrameRate(fps)
+        }
         switch e {
         case .pose(let s):
             lastSample = s
@@ -361,6 +372,7 @@ import GlanzowKit
         eventLog.append("switch", fields) // NFR-01 latency, NFR-03 review
         if case .skipped = r.outcome { return }
         lastSwitchAt = r.time
+        learning.noteSwitch(at: r.time)
         log.info("switch → \(r.to, privacy: .public) settle-to-focus \(Int((t - r.pendingSince) * 1000)) ms")
     }
 
@@ -374,9 +386,33 @@ import GlanzowKit
         if let key, now() - lastSwitchAt > 0.5 { recorder.record(.focus, at: now(), display: key) }
     }
 
+    /// FR-LRN-01…04: learn from clicks while switching is live.
     private func clicked(_ click: EventTapInputMonitor.Click) {
-        let key = registry.display(at: click.location)?.key
+        guard let key = registry.display(at: click.location)?.key else { return }
         recorder.record(.click, at: click.time, display: key)
+        guard switchingEnabled, defaults.bool(forKey: Pref.learnFromClicks) else { return }
+        let update = learning.click(at: click.time, on: key, classifier: classifier, model: store.model(key))
+        if let m = update.model {
+            store.set([m], persist: false)
+            rebuildModels()
+            scheduleSave()
+        }
+        if let miss = update.driftAlert {
+            eventLog.append("drift", ["missRate": miss])
+            notifier.once("drift", title: "Glanzow may need recalibrating",
+                          body: "On \(Int((miss * 100).rounded()))% of your last 50 clicks, the screen you clicked wasn't the one Glanzow thought you were facing. Recalibrate from the menu.")
+        }
+    }
+
+    /// Click learning changes models often; write them at most every 30 s.
+    private func scheduleSave() {
+        guard !saveScheduled else { return }
+        saveScheduled = true
+        Task { [weak self] in
+            try? await Task.sleep(for: .seconds(30))
+            self?.saveScheduled = false
+            self?.store.save()
+        }
     }
 
     /// FR-SAF-04: stop the camera while the Mac is locked, asleep, in the screensaver, or
@@ -562,11 +598,15 @@ import GlanzowKit
                 return "Calibration cancelled."
             }
             store.set(outcome.models)
+            learning.reset()
+            notifier.forget("drift")
             rebuildModels()
             let calibrated = displays.filter { d in !uncalibrated.contains(d) }
             guard let accuracy = await overlay.validate(calibrated, classifier: classifier) else { return "Calibration cancelled." }
             overlay.hide()
 
+            // SPEC: FR-CAL-05 says "at least 90% correct". Applied per display, not pooled, so
+            // one weak display can't hide behind two strong ones.
             let failing = outcome.failed + calibrated.filter { (accuracy[$0.key] ?? 0) < 0.9 }
             let pairs = calibrated.compactMap { d in store.model(d.key).map { (display: d, model: $0) } }
             let orderOK = CalibrationStore.yawOrderConsistent(pairs)

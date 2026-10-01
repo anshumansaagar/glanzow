@@ -21,9 +21,10 @@ public final class CalibrationStore: @unchecked Sendable {
 
     public func model(_ key: DisplayKey) -> DisplayModel? { models.withLock { $0[key] } }
 
-    public func set(_ list: [DisplayModel]) {
+    /// `persist: false` for frequent small updates (click learning); call `save()` later.
+    public func set(_ list: [DisplayModel], persist: Bool = true) {
         models.withLock { m in for x in list { m[x.key] = x } }
-        save()
+        if persist { save() }
     }
 
     /// A model is usable only for a connected display and the camera that made it: moving to

@@ -185,3 +185,33 @@ public final class CameraCapture: NSObject, @unchecked Sendable {
         DispatchQueue.main.async { [weak self] in MainActor.assumeIsolated { self?.onState?(s) } }
     }
 }
+
+/// FR-TRK-08: drop to 5 fps after 30 s with no head movement over 2°, back to 15 fps on movement.
+/// Movement is measured from an anchor pose, so a slow drift still counts once it adds up.
+public struct FrameRateGovernor: Sendable {
+    public static let active = 15
+    public static let idle = 5
+    public private(set) var fps = active
+    private var anchor: SIMD2<Double>?
+    private var anchorTime: TimeInterval?
+
+    public init() {}
+
+    /// The new frame rate when it should change, else nil. No face counts as no movement, so an
+    /// empty chair also drops to 5 fps.
+    public mutating func update(_ e: PoseEvent) -> Int? {
+        let t = e.timestamp
+        if case .pose(let s) = e, anchor.map({ max(abs(s.yaw - $0.x), abs(s.pitch - $0.y)) > 2 }) ?? true {
+            anchor = s.angles
+            anchorTime = t
+            guard fps != Self.active else { return nil }
+            fps = Self.active
+            return fps
+        }
+        let since = anchorTime ?? t
+        anchorTime = since
+        guard fps == Self.active, t - since >= 30 else { return nil }
+        fps = Self.idle
+        return fps
+    }
+}

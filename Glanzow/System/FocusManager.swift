@@ -62,8 +62,8 @@ public struct FocusOptions: Sendable {
             onFocused?(d.bounds)
             return .pointerOnly
         }
-        // FR-SAF-07: never switch into an excluded app. Raising a window behind it instead would
-        // cover the call or game, so do nothing.
+        // SPEC: FR-SAF-07 says never switch into an excluded app. Raising the next window behind
+        // it instead would cover the call or game, so the switch does nothing at all.
         if let bundle = NSRunningApplication(processIdentifier: info.pid)?.bundleIdentifier, options.excludedApps.contains(bundle) {
             return .skipped("excluded app")
         }

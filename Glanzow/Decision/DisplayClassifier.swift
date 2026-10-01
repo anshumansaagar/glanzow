@@ -25,7 +25,8 @@ public struct MahalanobisClassifier: DisplayClassifier {
     let clusters: [Cluster]
     public let rejectThreshold: Double
     public let hysteresisFactor: Double
-    /// Centre of all display means: the user's neutral pose for distance compensation.
+    /// SPEC: §6.5 doesn't define the "neutral pose". The centre of all display means is used: it
+    /// is where the user sits facing, and it needs no extra calibration step.
     let neutral: SIMD2<Double>
     let calibratedScale: Double
     public let compensateDistance: Bool
