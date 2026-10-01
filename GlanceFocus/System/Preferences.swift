@@ -7,6 +7,13 @@ public func now() -> TimeInterval { CACurrentMediaTime() }
 
 public func logger(_ category: String) -> Logger { Logger(subsystem: "dev.glancefocus", category: category) }
 
+public enum Paths {
+    /// ~/Library/Application Support/GlanceFocus — calibration, event log, debug recordings.
+    public static var appSupport: URL {
+        URL.applicationSupportDirectory.appending(path: "GlanceFocus", directoryHint: .isDirectory)
+    }
+}
+
 /// UserDefaults keys for every setting in spec §3.9, plus the hidden debug pane (§6.2, §6.3).
 /// Calibration lives separately, as JSON in Application Support (CalibrationStore).
 public enum Pref {

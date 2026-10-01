@@ -47,6 +47,9 @@ import GlanceFocusKit
         menu.addItem(recal)
 
         add(menu, "Settings…", #selector(settings), key: ",")
+        let debug = add(menu, "Debug Settings…", #selector(debugSettings), key: ",")
+        debug.keyEquivalentModifierMask = [.command, .option]
+        debug.isAlternate = true
         add(menu, "Welcome Guide…", #selector(welcome))
         menu.addItem(.separator())
         add(menu, "Quit GlanceFocus", #selector(quit), key: "q")
@@ -67,6 +70,7 @@ import GlanceFocusKit
         Task { await model.calibrate([key]) }
     }
     @objc private func settings() { model.showSettings() }
+    @objc private func debugSettings() { model.showSettings(debug: true) }
     @objc private func welcome() { model.showOnboarding() }
     @objc private func quit() { NSApp.terminate(nil) }
 }

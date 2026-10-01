@@ -5,11 +5,16 @@ import GlanceFocusKit
 /// §3.9 settings. Values persist in UserDefaults via @AppStorage; the app reacts to changes.
 struct SettingsView: View {
     @ObservedObject var model: AppModel
+    let showDebug: Bool
 
     var body: some View {
         TabView {
             GeneralSettings(model: model).tabItem { Label("General", systemImage: "gearshape") }
+            CameraSettings().tabItem { Label("Camera", systemImage: "camera") }
             ExcludedAppsSettings().tabItem { Label("Excluded Apps", systemImage: "nosign") }
+            if showDebug {
+                DebugSettings(model: model).tabItem { Label("Debug", systemImage: "ladybug") }
+            }
         }
         .frame(width: 520, height: 560)
     }
@@ -132,5 +137,68 @@ struct ExcludedAppsSettings: View {
             .filter { $0.activationPolicy == .regular }
             .compactMap(\.bundleIdentifier)
         return Array(Set(ids)).sorted { name($0).localizedCaseInsensitiveCompare(name($1)) == .orderedAscending }
+    }
+}
+
+/// FR-TRK-07: every video device; the choice persists by unique ID.
+struct CameraSettings: View {
+    @AppStorage(Pref.cameraID) private var cameraID = ""
+    @State private var devices = CameraCapture.devices().map { (id: $0.uniqueID, name: $0.localizedName) }
+
+    var body: some View {
+        Form {
+            Picker("Camera", selection: $cameraID) {
+                Text("Built-in camera (default)").tag("")
+                ForEach(devices, id: \.id) { Text($0.name).tag($0.id) }
+                if !cameraID.isEmpty && !devices.contains(where: { $0.id == cameraID }) {
+                    Text("Saved camera (not connected)").tag(cameraID)
+                }
+            }
+            Text("If the chosen camera is missing, GlanceFocus uses the built-in one. Calibration belongs to one camera, so switching cameras asks you to calibrate again.")
+                .font(.callout).foregroundStyle(.secondary)
+        }
+        .formStyle(.grouped)
+        .onAppear { devices = CameraCapture.devices().map { (id: $0.uniqueID, name: $0.localizedName) } }
+    }
+}
+
+/// §6.2 hidden debug pane: filter and classifier tuning, pupil tracking, overlay, recording.
+struct DebugSettings: View {
+    @ObservedObject var model: AppModel
+    @AppStorage(Pref.minCutoff) private var minCutoff = 1.0
+    @AppStorage(Pref.beta) private var beta = 0.05
+    @AppStorage(Pref.dCutoff) private var dCutoff = 1.0
+    @AppStorage(Pref.rejectThreshold) private var rejectThreshold = 4.0
+    @AppStorage(Pref.trackPupils) private var trackPupils = false
+    @AppStorage(Pref.showDebugOverlay) private var showOverlay = false
+
+    var body: some View {
+        Form {
+            Section("Smoothing (One Euro filter)") {
+                LabeledSlider(title: "Min cutoff", value: $minCutoff, range: 0.1...5, step: 0.1) { String(format: "%.1f Hz", $0) }
+                LabeledSlider(title: "Beta", value: $beta, range: 0...0.5, step: 0.005) { String(format: "%.3f", $0) }
+                LabeledSlider(title: "Derivative cutoff", value: $dCutoff, range: 0.1...5, step: 0.1) { String(format: "%.1f Hz", $0) }
+            }
+            Section("Classifier") {
+                LabeledSlider(title: "Off-screen threshold", value: $rejectThreshold, range: 1...10, step: 0.5) { String(format: "%.1f", $0) }
+            }
+            Section("Tracking") {
+                Toggle("Track pupils (more CPU; not used for screen choice in V1)", isOn: $trackPupils)
+                Toggle("Show debug overlay", isOn: $showOverlay)
+            }
+            #if DEBUG
+            Section("Recording") {
+                Button(model.isRecording ? "Stop Recording" : "Start Recording") { model.toggleRecording() }
+                Text("Records pose numbers and input timing for ReplayCLI. Never images.")
+                    .font(.callout).foregroundStyle(.secondary)
+            }
+            #endif
+            Button("Reset Debug Values") {
+                for key in [Pref.minCutoff, Pref.beta, Pref.dCutoff, Pref.rejectThreshold, Pref.trackPupils] {
+                    UserDefaults.standard.removeObject(forKey: key)
+                }
+            }
+        }
+        .formStyle(.grouped)
     }
 }

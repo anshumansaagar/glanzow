@@ -125,3 +125,10 @@ public final class DisplayRegistry: @unchecked Sendable {
 
     public func display(at point: CGPoint) -> DisplayInfo? { displays.first { $0.bounds.contains(point) } }
 }
+
+/// Global display coordinates (top-left origin) → AppKit screen coordinates (bottom-left origin
+/// of the primary display), for placing overlay windows.
+@MainActor public func cocoaRect(_ r: CGRect) -> CGRect {
+    let primaryHeight = NSScreen.screens.first?.frame.height ?? 0
+    return CGRect(x: r.minX, y: primaryHeight - r.maxY, width: r.width, height: r.height)
+}
