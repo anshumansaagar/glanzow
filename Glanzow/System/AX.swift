@@ -6,6 +6,12 @@ import ApplicationServices
 @globalActor public actor AXActor {
     public static let shared = AXActor()
     private let queue = DispatchSerialQueue(label: "dev.glanzow.ax", qos: .userInitiated)
+
+    private init() {
+        // §7: the system-wide element sets the default for every element we touch, including
+        // windows and children read from an app, not only the app elements set explicitly.
+        AXUIElementSetMessagingTimeout(AXUIElementCreateSystemWide(), axTimeout)
+    }
     public nonisolated var unownedExecutor: UnownedSerialExecutor { queue.asUnownedSerialExecutor() }
 }
 

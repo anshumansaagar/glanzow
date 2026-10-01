@@ -25,8 +25,9 @@ public final class EventLog: @unchecked Sendable {
                 try? fm.moveItem(at: url, to: old)
             }
             if let h = try? FileHandle(forWritingTo: url) {
-                h.seekToEndOfFile()
-                h.write(data)
+                // The throwing API: the old write(_:) raises an uncatchable exception on a full disk.
+                _ = try? h.seekToEnd()
+                try? h.write(contentsOf: data)
                 try? h.close()
             } else {
                 try? data.write(to: url)

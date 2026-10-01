@@ -81,6 +81,7 @@ import GlanzowKit
     private var cameraWanted = false
     private var switchingEnabled = true // first reconcile pushes the real value
     private var monitorsStarted = false
+    private var callbacksWired = false
     private var lastSwitchAt = -Double.infinity
     private var snapshot: SwitchController.Snapshot?
     private var learning = LearningEngine()
@@ -111,6 +112,10 @@ import GlanzowKit
         camera.onState = { [weak self] s in self?.cameraChanged(s) }
         observers.append(NotificationCenter.default.addObserver(forName: UserDefaults.didChangeNotification, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.applySettings() }
+        })
+        // A permission granted in System Settings is noticed when the user comes back.
+        observers.append(NotificationCenter.default.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.refreshPermissions() }
         })
         let poses = tracker.events()
         tasks.append(Task { [weak self] in
@@ -143,6 +148,11 @@ import GlanzowKit
         let controller = controller, focusManager = focusManager, windows = windows
         Task { [weak self] in
             guard self != nil else { return }
+            defer {
+                // Window tracking starts only now, so its first focus report finds the callbacks.
+                self?.callbacksWired = true
+                self?.startMonitors()
+            }
             await controller.setOnSwitch { [weak self] r in Task { @MainActor in self?.didSwitch(r) } }
             await focusManager.setCallbacks(
                 onFocused: { [weak self] rect in Task { @MainActor in self?.focused(rect) } },
@@ -163,7 +173,7 @@ import GlanzowKit
 
     /// Window tracking and the input tap need Accessibility; start them once it is granted.
     private func startMonitors() {
-        guard axTrusted else { return }
+        guard axTrusted, callbacksWired else { return }
         if !monitorsStarted {
             monitorsStarted = true
             windows.start()
@@ -513,7 +523,7 @@ import GlanzowKit
         cameraDenied = cam == .denied || cam == .restricted
         axTrusted = AXIsProcessTrusted()
         startMonitors()
-        if !permissionsGranted { startPermissionPolling() }
+        if !permissionsGranted || !cameraAuthorized { startPermissionPolling() }
         reconcile()
     }
 
@@ -527,17 +537,18 @@ import GlanzowKit
         startPermissionPolling()
     }
 
-    /// FR-ONB-03: polls every second until Accessibility (and, if the tap needs it, Input
-    /// Monitoring) is granted, so onboarding advances on its own.
+    /// FR-ONB-03: polls every second until camera, Accessibility and (if the tap needs it)
+    /// Input Monitoring are granted, so onboarding advances on its own.
     private func startPermissionPolling() {
         guard permissionPoll == nil else { return }
         permissionPoll = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated {
                 guard let self else { return }
                 let ax = AXIsProcessTrusted()
-                guard ax != self.axTrusted || (ax && !self.inputOK) else { return }
+                let camera = AVCaptureDevice.authorizationStatus(for: .video) == .authorized
+                guard ax != self.axTrusted || camera != self.cameraAuthorized || (ax && !self.inputOK) else { return }
                 self.refreshPermissions()
-                if self.permissionsGranted {
+                if self.permissionsGranted && self.cameraAuthorized {
                     self.permissionPoll?.invalidate()
                     self.permissionPoll = nil
                 }

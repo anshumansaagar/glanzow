@@ -55,25 +55,37 @@ public struct FocusOptions: Sendable {
         // FR-FOC-01: the window last focused on this display, if it is still open and on this
         // display's visible Space (FR-FOC-08). Otherwise FR-FOC-03: the frontmost window mostly here.
         let remembered = windows.lastFocused[key].flatMap { r in candidates.first { $0.id == r.id }.map { (r, $0) } }
-        guard let info = remembered?.1 ?? candidates.first else {
+        let ordered = (remembered.map { [$0.1] } ?? []) + candidates.filter { $0.id != remembered?.1.id }
+        guard !ordered.isEmpty else {
             // FR-FOC-05: an empty display gets the pointer only, so new windows and Spaces follow.
             guard options.movePointer else { return .skipped("no window") }
             warp(to: input.lastPointer(on: key) ?? CGPoint(x: d.bounds.midX, y: d.bounds.midY))
             onFocused?(d.bounds)
             return .pointerOnly
         }
-        // SPEC: FR-SAF-07 says never switch into an excluded app. Raising the next window behind
-        // it instead would cover the call or game, so the switch does nothing at all.
-        if let bundle = NSRunningApplication(processIdentifier: info.pid)?.bundleIdentifier, options.excludedApps.contains(bundle) {
-            return .skipped("excluded app")
+        // Some layer-0 windows have no AX counterpart (invisible helpers, some Electron shells);
+        // they are not windows the user works in, so move on to the next. Bounded: each try is IPC.
+        var found: (info: WindowInfo, element: AXUIElement, app: AXUIElement)?
+        for info in ordered.prefix(5) {
+            // SPEC: FR-SAF-07 says never switch into an excluded app. Raising the next window behind
+            // it instead would cover the call or game, so the switch does nothing at all.
+            if let bundle = NSRunningApplication(processIdentifier: info.pid)?.bundleIdentifier, options.excludedApps.contains(bundle) {
+                return .skipped("excluded app")
+            }
+            let app = AXUIElement.application(info.pid)
+            if info.id == remembered?.1.id, let element = remembered?.0.element {
+                found = (info, element, app)
+                break
+            }
+            let (windowList, listError) = app.raw(kAXWindowsAttribute)
+            if listError == .apiDisabled { onAXDisabled?(); return .skipped("Accessibility revoked") }
+            if listError == .cannotComplete { return skip("app not responding", info) } // §7 AX timeout
+            if let element = (windowList as? [AXUIElement])?.first(where: { $0.windowID == info.id }) {
+                found = (info, element, app)
+                break
+            }
         }
-        let app = AXUIElement.application(info.pid)
-        let (windowList, listError) = app.raw(kAXWindowsAttribute)
-        if listError == .apiDisabled { onAXDisabled?(); return .skipped("Accessibility revoked") }
-        if listError == .cannotComplete { return skip("app not responding", info) } // §7 AX timeout
-        guard let element = remembered?.0.element ?? (windowList as? [AXUIElement])?.first(where: { $0.windowID == info.id }) else {
-            return skip("window not reachable through Accessibility", info)
-        }
+        guard let (info, element, app) = found else { return .skipped("no window reachable through Accessibility") }
         AXUIElementSetMessagingTimeout(element, axTimeout)
 
         // FR-FOC-04: raise and activate. Never a synthetic click in V1.

@@ -41,6 +41,7 @@ public actor SwitchController {
     private var paused = true // the app un-pauses once permissions, camera and calibration are ready
     private var latest: Classification?
     private var retryAfter = -Double.infinity
+    private var inFlight = false
     private var blockedBy: String?
 
     public init(classifier: any DisplayClassifier, tuning: Tuning, focus: any FocusPerformer, input: any InputMonitor,
@@ -114,12 +115,17 @@ public actor SwitchController {
     /// FR-SAF-08: the user double-tapped Fn while facing a display: switch now, no dwell or typing wait.
     public func confirm(at t: TimeInterval) async {
         guard !paused, !noFace, case .candidate(let d)? = latest, d != current else { return }
-        pending = d
+        if pending != d {
+            pending = d
+            pendingSince = t
+        }
         await attempt(d, at: t, confirmed: true)
     }
 
     private func attempt(_ d: DisplayKey, at t: TimeInterval, confirmed: Bool) async {
-        guard t >= retryAfter else { return }
+        guard t >= retryAfter, !inFlight else { return }
+        inFlight = true // a confirm and a frame must not both raise the window
+        defer { inFlight = false }
         if t - input.lastMouseActivity < tuning.mouseQuiet { blockedBy = "mouse"; return } // FR-SAF-02
         if !confirmed, let pause = tuning.typingPause, t - input.lastKeystroke < pause,
            t - pendingSince < tuning.typingOverride { // FR-SAF-01, with the 1 s sustained-turn override
@@ -140,7 +146,8 @@ public actor SwitchController {
                                   focusDuration: now() - started)
         switch outcome {
         case .focusedWindow, .pointerOnly:
-            current = d
+            // If the user focused something else while we were raising, theirs wins.
+            if current == from { current = d }
             blockedBy = nil
         case .skipped(let why):
             blockedBy = why

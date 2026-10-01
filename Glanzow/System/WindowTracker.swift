@@ -57,7 +57,7 @@ import os
 
     private func terminated(_ pid: pid_t) {
         if let o = observers.removeValue(forKey: pid) {
-            CFRunLoopRemoveSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(o), .defaultMode)
+            CFRunLoopRemoveSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(o), .commonModes)
         }
         lastFocused = lastFocused.filter { $0.value.pid != pid }
         if focused?.pid == pid { focused = nil }
@@ -69,12 +69,15 @@ import os
         guard AXObserverCreate(pid, axCallback, &observer) == .success, let observer else { return }
         let app = AXUIElement.application(pid)
         let refcon = Unmanaged.passUnretained(self).toOpaque()
-        for n in [kAXFocusedWindowChangedNotification, kAXMainWindowChangedNotification,
-                  kAXWindowMovedNotification, kAXWindowResizedNotification, kAXWindowMiniaturizedNotification] {
+        // A just-launched app often can't answer yet; without the focus notification there is
+        // nothing to keep, so try again on its next activation.
+        guard AXObserverAddNotification(observer, app, kAXFocusedWindowChangedNotification as CFString, refcon) == .success else { return }
+        for n in [kAXMainWindowChangedNotification, kAXWindowMovedNotification, kAXWindowResizedNotification, kAXWindowMiniaturizedNotification] {
             AXObserverAddNotification(observer, app, n as CFString, refcon)
         }
-        // Callbacks need a run loop; the main one is always there. They only hop back here.
-        CFRunLoopAddSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(observer), .defaultMode)
+        // Callbacks need a run loop; the main one is always there. Common modes keep them
+        // flowing while a menu or alert is open. They only hop back to this actor.
+        CFRunLoopAddSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(observer), .commonModes)
         observers[pid] = observer
     }
 

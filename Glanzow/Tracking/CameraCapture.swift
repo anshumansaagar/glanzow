@@ -28,6 +28,8 @@ public final class CameraCapture: NSObject, @unchecked Sendable {
     private var device: AVCaptureDevice?
     private var retry: DispatchSourceTimer?
     private var state = State.stopped
+    /// AVCaptureSession.isInterrupted is unavailable on macOS; track it from the notifications.
+    private var interrupted = false
 
     public init(tracker: PoseTracker) {
         self.tracker = tracker
@@ -49,18 +51,29 @@ public final class CameraCapture: NSObject, @unchecked Sendable {
                 self.configure() // falls back to built-in, else reports .noCamera
             }
         }
-        for name in [AVCaptureSession.runtimeErrorNotification, AVCaptureSession.wasInterruptedNotification] {
-            nc.addObserver(forName: name, object: session, queue: nil) { [weak self] note in
-                self?.queue.async {
-                    guard let self, self.wanted else { return }
-                    self.log.error("capture stopped: \(note.name.rawValue, privacy: .public)")
-                    self.publish(.busy)
-                    self.scheduleRetry()
-                }
+        nc.addObserver(forName: AVCaptureSession.runtimeErrorNotification, object: session, queue: nil) { [weak self] _ in
+            self?.queue.async {
+                guard let self, self.wanted else { return }
+                self.log.error("capture runtime error")
+                // Often just the unplug the disconnect handler already dealt with: try again
+                // first, and report busy only if the camera really won't run.
+                self.configure()
+            }
+        }
+        nc.addObserver(forName: AVCaptureSession.wasInterruptedNotification, object: session, queue: nil) { [weak self] _ in
+            self?.queue.async {
+                guard let self, self.wanted else { return }
+                self.log.error("capture interrupted")
+                self.interrupted = true
+                self.publish(.busy)
+                self.scheduleRetry()
             }
         }
         nc.addObserver(forName: AVCaptureSession.interruptionEndedNotification, object: session, queue: nil) { [weak self] _ in
-            self?.queue.async { self?.configure() }
+            self?.queue.async {
+                self?.interrupted = false
+                self?.configure()
+            }
         }
     }
 
@@ -138,7 +151,7 @@ public final class CameraCapture: NSObject, @unchecked Sendable {
         }
         if !session.isRunning { session.startRunning() }
         applyFrameRate()
-        if session.isRunning {
+        if session.isRunning && !interrupted {
             cancelRetry()
             publish(.running(id: pick.uniqueID, name: pick.localizedName))
         } else {
