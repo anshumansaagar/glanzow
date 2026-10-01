@@ -1,5 +1,5 @@
 import XCTest
-@testable import GlanceFocusKit
+@testable import GlanzowKit
 
 final class PreferencesTests: XCTestCase {
     func test_settings_defaultsMatchSpecTable() {

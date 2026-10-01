@@ -3,7 +3,7 @@ import ApplicationServices
 import AVFoundation
 import ServiceManagement
 import SwiftUI
-import GlanceFocusKit
+import GlanzowKit
 
 /// Owns every module, wires the pipeline together, and turns permission, pause, camera and
 /// calibration state into one menu bar status.
@@ -45,10 +45,15 @@ import GlanceFocusKit
     @Published private(set) var cameraState = CameraCapture.State.stopped
     @Published private(set) var faceVisible = false
     @Published private(set) var isRecording = false
+    @Published private(set) var calibrating = false
+    @Published private(set) var uncalibrated: [DisplayInfo] = []
 
     let defaults = UserDefaults.standard
     let registry = DisplayRegistry.shared
     let tracker = PoseTracker()
+    let store = CalibrationStore()
+    private(set) var classifier = MahalanobisClassifier(models: [])
+    private var promptedFor: Set<DisplayKey> = []
     lazy var camera = CameraCapture(tracker: tracker)
     private let recorder = PoseRecorder()
     private let log = logger("app")
@@ -100,7 +105,7 @@ import GlanceFocusKit
 
     /// Brings the camera and status in line with permissions, pauses and calibration.
     private func reconcile() {
-        let wantCamera = cameraAuthorized && !userPaused && defaults.bool(forKey: Pref.onboardingDone)
+        let wantCamera = cameraAuthorized && !userPaused && (defaults.bool(forKey: Pref.onboardingDone) || calibrating)
         if wantCamera != cameraWanted {
             cameraWanted = wantCamera
             if wantCamera { camera.start(preferredID: preferredCamera) } else { camera.stop() }
@@ -111,7 +116,9 @@ import GlanceFocusKit
     private func computeStatus() -> Status {
         if !cameraAuthorized || !permissionsGranted { return .needsPermission }
         if userPaused { return .paused }
+        if calibrating { return .calibrating }
         if cameraState == .noCamera || cameraState == .busy { return .noCamera }
+        if !uncalibrated.isEmpty { return .needsCalibration }
         if !faceVisible { return .noFace }
         return .active
     }
@@ -120,7 +127,9 @@ import GlanceFocusKit
         log.info("camera state \(String(describing: s), privacy: .public)")
         cameraState = s
         if case .running = s {} else { setFaceVisible(false) }
+        rebuildModels()
         reconcile()
+        promptIfUncalibrated()
     }
 
     /// Re-reads settings after any UserDefaults change; cheap and idempotent.
@@ -161,7 +170,7 @@ import GlanceFocusKit
 
     private func debugText() -> String {
         func f(_ x: Double) -> String { String(format: "%+6.1f", x) }
-        var lines = ["GlanceFocus debug — \(status.title)"]
+        var lines = ["Glanzow debug — \(status.title)"]
         if let s = lastSample, faceVisible {
             lines.append("yaw \(f(s.yaw))°  pitch \(f(s.pitch))°  roll \(f(s.roll))°")
             lines.append(String(format: "face scale %.3f  confidence %.2f", s.faceScale, s.confidence))
@@ -190,10 +199,42 @@ import GlanceFocusKit
         isRecording = recorder.isRecording
     }
 
+    /// FR-CAL-07: rebuild the display map; any display without calibration keeps switching
+    /// paused (status "Needs calibration") and gets one prompt.
     private func displaysChanged(_ list: [DisplayInfo]) {
         displays = list
+        rebuildModels()
         reconcile()
+        promptIfUncalibrated()
     }
+
+    /// Classifier from the models that fit the connected displays and the running camera.
+    private func rebuildModels() {
+        let tuning = Tuning(defaults)
+        classifier = MahalanobisClassifier(models: store.valid(for: displays, cameraID: cameraID),
+                                           rejectThreshold: tuning.rejectThreshold, hysteresisFactor: tuning.hysteresisFactor)
+        // Until the camera runs we cannot tell which camera's calibration applies.
+        uncalibrated = cameraID.isEmpty ? [] : store.uncalibrated(displays, cameraID: cameraID)
+    }
+
+    private func promptIfUncalibrated() {
+        let fresh = uncalibrated.filter { !promptedFor.contains($0.key) }
+        guard !fresh.isEmpty, !calibrating, defaults.bool(forKey: Pref.onboardingDone) else { return }
+        promptedFor.formUnion(fresh.map(\.key))
+        let alert = NSAlert()
+        alert.messageText = fresh.count == 1 ? "Calibrate \(fresh[0].name)?" : "Calibrate \(fresh.count) displays?"
+        var info = "\(fresh.map(\.name).joined(separator: ", ")) has no calibration for this camera. Glanzow won't switch screens until every connected display is calibrated."
+        if displays.contains(where: \.ambiguous) { info += "\n\n" + Self.ambiguousNote }
+        alert.informativeText = info
+        alert.addButton(withTitle: "Calibrate Now")
+        alert.addButton(withTitle: "Later")
+        NSApp.activate()
+        if alert.runModal() == .alertFirstButtonReturn {
+            Task { await calibrate(fresh.map(\.key)) }
+        }
+    }
+
+    static let ambiguousNote = "Two identical monitors don't report distinct serial numbers, so Glanzow tells them apart by their position. If you rearrange them in System Settings, recalibrate."
 
     // MARK: Permissions (FR-ONB-02, FR-ONB-03)
 
@@ -263,15 +304,72 @@ import GlanceFocusKit
 
     // MARK: Calibration
 
-    /// Returns a short result line for the onboarding window.
+    /// FR-CAL-01…06: calibrate `keys` (nil = all displays), validate every calibrated display,
+    /// and offer to redo the ones under 90%. Returns a short result line for onboarding.
     @discardableResult
-    func calibrate(_ keys: [DisplayKey]?) async -> String? { nil }
+    func calibrate(_ keys: [DisplayKey]?) async -> String? {
+        guard !calibrating else { return nil }
+        guard cameraAuthorized else { return "Camera access is needed first." }
+        calibrating = true
+        reconcile() // starts the camera, pauses switching
+        defer {
+            calibrating = false
+            rebuildModels()
+            reconcile()
+        }
+        guard await waitForCamera() else { return "No camera is available." }
+        let overlay = CalibrationOverlay(source: tracker)
+        defer { overlay.close() }
+        var targets = displays.filter { keys?.contains($0.key) ?? true }
+        while true {
+            guard let outcome = await overlay.calibrate(targets, among: displays, cameraID: cameraID) else {
+                return "Calibration cancelled."
+            }
+            store.set(outcome.models)
+            rebuildModels()
+            let calibrated = displays.filter { d in !uncalibrated.contains(d) }
+            guard let accuracy = await overlay.validate(calibrated, classifier: classifier) else { return "Calibration cancelled." }
+            overlay.hide()
+
+            let failing = outcome.failed + calibrated.filter { (accuracy[$0.key] ?? 0) < 0.9 }
+            let pairs = calibrated.compactMap { d in store.model(d.key).map { (display: d, model: $0) } }
+            let orderOK = CalibrationStore.yawOrderConsistent(pairs)
+            let summary = calibrated.map { "\($0.name) \(Int(((accuracy[$0.key] ?? 0) * 100).rounded()))%" }.joined(separator: ", ")
+            log.info("validation \(summary, privacy: .public) order=\(orderOK)")
+            if failing.isEmpty && orderOK { return "Calibrated. Validation: \(summary)." }
+
+            let alert = NSAlert()
+            alert.messageText = "Calibration needs another try"
+            var lines = ["Validation: \(summary). Each display needs at least 90%."]
+            if !outcome.failed.isEmpty {
+                lines.append("Your face wasn't seen clearly on \(outcome.failed.map(\.name).joined(separator: ", ")). Check the lighting and that the camera can see you.")
+            }
+            if !orderOK {
+                lines.append("Head angles don't line up with the display arrangement in System Settings. Check the arrangement, then calibrate all displays.")
+            }
+            alert.informativeText = lines.joined(separator: "\n\n")
+            let redo = failing.isEmpty ? displays : failing
+            alert.addButton(withTitle: failing.isEmpty ? "Redo All" : "Redo \(redo.map(\.name).joined(separator: ", "))")
+            alert.addButton(withTitle: "Keep Anyway")
+            NSApp.activate()
+            guard alert.runModal() == .alertFirstButtonReturn else { return "Calibrated. Validation: \(summary)." }
+            targets = redo
+        }
+    }
+
+    private func waitForCamera() async -> Bool {
+        for _ in 0..<50 {
+            if case .running = cameraState { return true }
+            try? await Task.sleep(for: .milliseconds(100))
+        }
+        return false
+    }
 
     // MARK: Windows
 
     func showOnboarding() {
         if onboardingWindow == nil {
-            onboardingWindow = Self.window("Welcome to GlanceFocus", OnboardingView(model: self))
+            onboardingWindow = Self.window("Welcome to Glanzow", OnboardingView(model: self))
         }
         Self.present(onboardingWindow!)
     }
@@ -284,7 +382,7 @@ import GlanceFocusKit
         if settingsWindow == nil || debug != settingsShowsDebug {
             settingsWindow?.close()
             settingsShowsDebug = debug
-            settingsWindow = Self.window("GlanceFocus Settings", SettingsView(model: self, showDebug: debug))
+            settingsWindow = Self.window("Glanzow Settings", SettingsView(model: self, showDebug: debug))
         }
         Self.present(settingsWindow!)
     }

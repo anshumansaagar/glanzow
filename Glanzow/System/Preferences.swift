@@ -5,12 +5,12 @@ import QuartzCore
 /// The one clock every module uses: seconds on the host clock (same base as camera frame times).
 public func now() -> TimeInterval { CACurrentMediaTime() }
 
-public func logger(_ category: String) -> Logger { Logger(subsystem: "dev.glancefocus", category: category) }
+public func logger(_ category: String) -> Logger { Logger(subsystem: "dev.glanzow", category: category) }
 
 public enum Paths {
-    /// ~/Library/Application Support/GlanceFocus — calibration, event log, debug recordings.
+    /// ~/Library/Application Support/Glanzow — calibration, event log, debug recordings.
     public static var appSupport: URL {
-        URL.applicationSupportDirectory.appending(path: "GlanceFocus", directoryHint: .isDirectory)
+        URL.applicationSupportDirectory.appending(path: "Glanzow", directoryHint: .isDirectory)
     }
 }
 

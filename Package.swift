@@ -6,11 +6,11 @@ import PackageDescription
 // .pbxproj. `make app` wraps the executable in a signed .app bundle (the camera prompt and TCC
 // permissions need a real bundle).
 let package = Package(
-    name: "GlanceFocus",
+    name: "Glanzow",
     platforms: [.macOS(.v14)],
     targets: [
-        .target(name: "GlanceFocusKit", path: "GlanceFocus", exclude: ["App"]),
-        .executableTarget(name: "GlanceFocus", dependencies: ["GlanceFocusKit"], path: "GlanceFocus/App"),
-        .testTarget(name: "GlanceFocusTests", dependencies: ["GlanceFocusKit"], path: "GlanceFocusTests"),
+        .target(name: "GlanzowKit", path: "Glanzow", exclude: ["App"]),
+        .executableTarget(name: "Glanzow", dependencies: ["GlanzowKit"], path: "Glanzow/App"),
+        .testTarget(name: "GlanzowTests", dependencies: ["GlanzowKit"], path: "GlanzowTests"),
     ]
 )

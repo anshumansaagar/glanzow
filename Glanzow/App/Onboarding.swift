@@ -1,5 +1,5 @@
 import SwiftUI
-import GlanceFocusKit
+import GlanzowKit
 
 /// FR-ONB-01: four steps — camera, Accessibility, calibration, done. Reopened from the menu (FR-ONB-04).
 struct OnboardingView: View {
@@ -54,13 +54,13 @@ struct OnboardingView: View {
     private var cameraStep: some View {
         VStack(alignment: .leading, spacing: 12) {
             heading("Camera")
-            Text("GlanceFocus uses your Mac's camera to see which screen you are facing, then moves keyboard focus there before you type.")
+            Text("Glanzow uses your Mac's camera to see which screen you are facing, then moves keyboard focus there before you type.")
             Text("Frames are processed in memory only. Nothing is saved to disk and nothing is sent over the network. The green camera light stays on whenever tracking runs — that is expected.")
                 .foregroundStyle(.secondary)
             if model.cameraAuthorized {
                 Label("Camera access granted", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
             } else if model.cameraDenied {
-                Text("Camera access is turned off for GlanceFocus.")
+                Text("Camera access is turned off for Glanzow.")
                 Button("Open Camera Settings") { AppModel.openPrivacySettings("Privacy_Camera") }
             } else {
                 Button("Allow Camera Access") { Task { await model.requestCamera() } }
@@ -71,14 +71,14 @@ struct OnboardingView: View {
     private var accessibilityStep: some View {
         VStack(alignment: .leading, spacing: 12) {
             heading("Accessibility")
-            Text("To bring windows forward and move the pointer, GlanceFocus needs Accessibility access. It notes only when keys are pressed, never which keys.")
+            Text("To bring windows forward and move the pointer, Glanzow needs Accessibility access. It notes only when keys are pressed, never which keys.")
             if model.permissionsGranted {
                 Label("Accessibility access granted", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
             } else if !model.axTrusted {
                 Button("Open Accessibility Settings") { model.requestAccessibility() }
                 HStack { ProgressView().controlSize(.small); Text("Waiting for permission…").foregroundStyle(.secondary) }
             } else {
-                Text("This Mac also needs Input Monitoring so GlanceFocus can pause while you type.")
+                Text("This Mac also needs Input Monitoring so Glanzow can pause while you type.")
                 Button("Open Input Monitoring Settings") { model.requestInputMonitoring() }
             }
         }
@@ -108,9 +108,9 @@ struct OnboardingView: View {
     private var doneStep: some View {
         VStack(alignment: .leading, spacing: 12) {
             heading("You're set")
-            Text("GlanceFocus lives in the menu bar. Look at a screen and keep looking for a moment: focus moves there. It waits while you type or use the mouse.")
+            Text("Glanzow lives in the menu bar. Look at a screen and keep looking for a moment: focus moves there. It waits while you type or use the mouse.")
             Text("Pause or resume any time with \(UserDefaults.standard.string(forKey: Pref.hotkeyLabel) ?? "⇧⌘G"). Recalibrate from the menu if you move your laptop or monitors.")
-            Toggle("Launch GlanceFocus at login", isOn: $launchAtLogin)
+            Toggle("Launch Glanzow at login", isOn: $launchAtLogin)
         }
     }
 }

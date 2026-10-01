@@ -1,6 +1,6 @@
 import AppKit
 import SwiftUI
-import GlanceFocusKit
+import GlanzowKit
 
 /// §3.9 settings. Values persist in UserDefaults via @AppStorage; the app reacts to changes.
 struct SettingsView: View {
@@ -11,6 +11,7 @@ struct SettingsView: View {
         TabView {
             GeneralSettings(model: model).tabItem { Label("General", systemImage: "gearshape") }
             CameraSettings().tabItem { Label("Camera", systemImage: "camera") }
+            CalibrationSettings(model: model).tabItem { Label("Calibration", systemImage: "scope") }
             ExcludedAppsSettings().tabItem { Label("Excluded Apps", systemImage: "nosign") }
             if showDebug {
                 DebugSettings(model: model).tabItem { Label("Debug", systemImage: "ladybug") }
@@ -82,7 +83,7 @@ struct GeneralSettings: View {
     }
 }
 
-/// FR-SAF-07: bundle IDs GlanceFocus never switches into or away from.
+/// FR-SAF-07: bundle IDs Glanzow never switches into or away from.
 struct ExcludedAppsSettings: View {
     @State private var apps = UserDefaults.standard.stringArray(forKey: Pref.excludedApps) ?? []
     @State private var newID = ""
@@ -103,7 +104,7 @@ struct ExcludedAppsSettings: View {
                     }
                 }
             } header: {
-                Text("GlanceFocus never switches into or away from these apps — useful for video calls and full-screen games.")
+                Text("Glanzow never switches into or away from these apps — useful for video calls and full-screen games.")
             }
             Section("Add") {
                 Menu("Add Running App") {
@@ -154,7 +155,7 @@ struct CameraSettings: View {
                     Text("Saved camera (not connected)").tag(cameraID)
                 }
             }
-            Text("If the chosen camera is missing, GlanceFocus uses the built-in one. Calibration belongs to one camera, so switching cameras asks you to calibrate again.")
+            Text("If the chosen camera is missing, Glanzow uses the built-in one. Calibration belongs to one camera, so switching cameras asks you to calibrate again.")
                 .font(.callout).foregroundStyle(.secondary)
         }
         .formStyle(.grouped)
@@ -200,5 +201,40 @@ struct DebugSettings: View {
             }
         }
         .formStyle(.grouped)
+    }
+}
+
+/// FR-CAL-06: calibration status per display, recalibrate one or all.
+struct CalibrationSettings: View {
+    @ObservedObject var model: AppModel
+
+    var body: some View {
+        Form {
+            Section {
+                ForEach(model.displays) { d in
+                    HStack {
+                        VStack(alignment: .leading) {
+                            Text(d.name)
+                            Text(status(d)).font(.caption).foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Button("Recalibrate") { Task { await model.calibrate([d.key]) } }
+                            .accessibilityLabel("Recalibrate \(d.name)")
+                    }
+                }
+            } footer: {
+                if model.displays.contains(where: \.ambiguous) { Text(AppModel.ambiguousNote) }
+            }
+            Button("Recalibrate All Displays") { Task { await model.calibrate(nil) } }
+                .disabled(model.calibrating)
+        }
+        .formStyle(.grouped)
+    }
+
+    private func status(_ d: DisplayInfo) -> String {
+        guard let m = model.store.model(d.key) else { return "Not calibrated" }
+        let date = m.calibratedAt.formatted(date: .abbreviated, time: .shortened)
+        if !model.cameraID.isEmpty && m.cameraID != model.cameraID { return "Calibrated \(date) with a different camera" }
+        return "Calibrated \(date)"
     }
 }

@@ -18,7 +18,7 @@ public final class CameraCapture: NSObject, @unchecked Sendable {
 
     private let session = AVCaptureSession()
     private let output = AVCaptureVideoDataOutput()
-    private let queue = DispatchQueue(label: "dev.glancefocus.camera")
+    private let queue = DispatchQueue(label: "dev.glanzow.camera")
     private let tracker: PoseTracker
     private let log = logger("camera")
     // Confined to `queue`.

@@ -1,5 +1,5 @@
 import XCTest
-@testable import GlanceFocusKit
+@testable import GlanzowKit
 
 /// FR-TRK-04. Reference values come from an independent Python port of the Casiez et al.
 /// reference implementation, run with the §6.2 defaults (min cutoff 1 Hz, beta 0.05, d cutoff 1 Hz)

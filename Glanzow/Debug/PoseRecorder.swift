@@ -19,7 +19,7 @@ public struct Recording: Codable, Sendable {
 public struct RecordedEvent: Codable, Sendable {
     public enum Kind: String, Codable, Sendable {
         case pose, noFace, key, mouse, click
-        /// The user (or GlanceFocus) focused a window on `display`.
+        /// The user (or Glanzow) focused a window on `display`.
         case focus
     }
 

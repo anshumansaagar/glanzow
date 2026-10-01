@@ -1,6 +1,6 @@
 import AppKit
 import Combine
-import GlanceFocusKit
+import GlanzowKit
 
 /// FR-UI-01, FR-UI-02: status item whose icon tracks the app state, and its menu.
 @MainActor final class MenuBarController: NSObject, NSMenuDelegate {
@@ -18,11 +18,11 @@ import GlanceFocusKit
     }
 
     private func show(_ status: AppModel.Status) {
-        let image = NSImage(systemSymbolName: status.symbol, accessibilityDescription: "GlanceFocus: \(status.title)")
+        let image = NSImage(systemSymbolName: status.symbol, accessibilityDescription: "Glanzow: \(status.title)")
         image?.isTemplate = true
         item.button?.image = image
         item.button?.title = image == nil ? "GF" : ""
-        item.button?.toolTip = "GlanceFocus — \(status.title)"
+        item.button?.toolTip = "Glanzow — \(status.title)"
     }
 
     func menuNeedsUpdate(_ menu: NSMenu) {
@@ -52,7 +52,7 @@ import GlanceFocusKit
         debug.isAlternate = true
         add(menu, "Welcome Guide…", #selector(welcome))
         menu.addItem(.separator())
-        add(menu, "Quit GlanceFocus", #selector(quit), key: "q")
+        add(menu, "Quit Glanzow", #selector(quit), key: "q")
     }
 
     @discardableResult

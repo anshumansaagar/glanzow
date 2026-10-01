@@ -64,7 +64,7 @@ public final class Broadcast<T: Sendable>: @unchecked Sendable {
 /// Vision face pose per camera frame (FR-TRK-02, 03), smoothing (FR-TRK-04), confidence gating.
 /// Runs entirely on its own serial queue, never the main thread. Frames never leave memory.
 public final class PoseTracker: NSObject, PoseSource, AVCaptureVideoDataOutputSampleBufferDelegate, @unchecked Sendable {
-    public let queue = DispatchQueue(label: "dev.glancefocus.vision", qos: .userInteractive)
+    public let queue = DispatchQueue(label: "dev.glanzow.vision", qos: .userInteractive)
 
     private struct Config {
         var smoothing = SmoothingParams()

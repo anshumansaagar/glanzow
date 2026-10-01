@@ -3,13 +3,13 @@
 <plist version="1.0">
 <dict>
 	<key>CFBundleIdentifier</key>
-	<string>dev.glancefocus.GlanceFocus</string>
+	<string>dev.glanzow.Glanzow</string>
 	<key>CFBundleName</key>
-	<string>GlanceFocus</string>
+	<string>Glanzow</string>
 	<key>CFBundleDisplayName</key>
-	<string>GlanceFocus</string>
+	<string>Glanzow</string>
 	<key>CFBundleExecutable</key>
-	<string>GlanceFocus</string>
+	<string>Glanzow</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
@@ -25,6 +25,6 @@
 	<key>NSHighResolutionCapable</key>
 	<true/>
 	<key>NSCameraUsageDescription</key>
-	<string>GlanceFocus uses the camera to see which screen you are facing. Frames are processed in memory only: never saved, never sent anywhere.</string>
+	<string>Glanzow uses the camera to see which screen you are facing. Frames are processed in memory only: never saved, never sent anywhere.</string>
 </dict>
 </plist>
