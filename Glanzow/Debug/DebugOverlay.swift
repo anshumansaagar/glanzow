@@ -9,12 +9,19 @@ import AppKit
 
     public init() {
         panel = Self.clickThroughPanel()
-        panel.backgroundColor = NSColor.black.withAlphaComponent(0.75)
+        panel.backgroundColor = .clear
+        let hud = NSVisualEffectView()
+        hud.material = .hudWindow
+        hud.state = .active
+        hud.wantsLayer = true
+        hud.layer?.cornerRadius = 12
+        hud.layer?.masksToBounds = true
+        panel.contentView = hud
         label.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
-        label.textColor = .white
+        label.textColor = .labelColor
         label.maximumNumberOfLines = 0
-        label.frame.origin = CGPoint(x: 10, y: 8)
-        panel.contentView?.addSubview(label)
+        label.frame.origin = CGPoint(x: 12, y: 10)
+        hud.addSubview(label)
 
         dot = Self.clickThroughPanel()
         dot.setContentSize(CGSize(width: 18, height: 18))
@@ -22,7 +29,9 @@ import AppKit
         let circle = NSView(frame: CGRect(x: 0, y: 0, width: 18, height: 18))
         circle.wantsLayer = true
         circle.layer?.cornerRadius = 9
-        circle.layer?.backgroundColor = NSColor.systemRed.withAlphaComponent(0.8).cgColor
+        circle.layer?.backgroundColor = Palette.gleam.cgColor
+        circle.layer?.borderColor = Palette.night.cgColor
+        circle.layer?.borderWidth = 2
         dot.contentView = circle
     }
 
@@ -47,7 +56,7 @@ import AppKit
     public func update(_ text: String, gaze: CGPoint?) {
         label.stringValue = text
         label.sizeToFit()
-        let size = CGSize(width: label.frame.width + 20, height: label.frame.height + 16)
+        let size = CGSize(width: label.frame.width + 24, height: label.frame.height + 20)
         if let screen = NSScreen.screens.first {
             let v = screen.visibleFrame
             panel.setFrame(CGRect(x: v.maxX - size.width - 12, y: v.maxY - size.height - 12, width: size.width, height: size.height), display: true)

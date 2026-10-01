@@ -29,13 +29,16 @@ import GlanzowKit
         menu.removeAllItems()
         let state = NSMenuItem(title: model.status.title, action: nil, keyEquivalent: "")
         state.isEnabled = false
+        state.image = NSImage(systemSymbolName: model.status.symbol, accessibilityDescription: nil)
         menu.addItem(state)
         menu.addItem(.separator())
 
         let shortcut = UserDefaults.standard.string(forKey: Pref.hotkeyLabel) ?? ""
-        add(menu, "\(model.userPaused ? "Resume" : "Pause")   \(shortcut)", #selector(togglePause))
+        add(menu, "\(model.userPaused ? "Resume" : "Pause")   \(shortcut)", #selector(togglePause),
+            symbol: model.userPaused ? "play.fill" : "pause.fill")
 
         let recal = NSMenuItem(title: "Recalibrate", action: nil, keyEquivalent: "")
+        recal.image = NSImage(systemSymbolName: "scope", accessibilityDescription: nil)
         let sub = NSMenu()
         add(sub, "All Displays", #selector(recalibrateAll))
         sub.addItem(.separator())
@@ -46,19 +49,20 @@ import GlanzowKit
         recal.submenu = sub
         menu.addItem(recal)
 
-        add(menu, "Settings…", #selector(settings), key: ",")
-        let debug = add(menu, "Debug Settings…", #selector(debugSettings), key: ",")
+        add(menu, "Settings…", #selector(settings), key: ",", symbol: "gearshape")
+        let debug = add(menu, "Debug Settings…", #selector(debugSettings), key: ",", symbol: "ladybug")
         debug.keyEquivalentModifierMask = [.command, .option]
         debug.isAlternate = true
-        add(menu, "Welcome Guide…", #selector(welcome))
+        add(menu, "Welcome Guide…", #selector(welcome), symbol: "hand.wave")
         menu.addItem(.separator())
-        add(menu, "Quit Glanzow", #selector(quit), key: "q")
+        add(menu, "Quit Glanzow", #selector(quit), key: "q", symbol: "power")
     }
 
     @discardableResult
-    private func add(_ menu: NSMenu, _ title: String, _ action: Selector, key: String = "") -> NSMenuItem {
+    private func add(_ menu: NSMenu, _ title: String, _ action: Selector, key: String = "", symbol: String? = nil) -> NSMenuItem {
         let i = NSMenuItem(title: title, action: action, keyEquivalent: key)
         i.target = self
+        if let symbol { i.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil) }
         menu.addItem(i)
         return i
     }

@@ -31,7 +31,8 @@ struct LabeledSlider: View {
     var body: some View {
         LabeledContent(title) {
             HStack {
-                Slider(value: $value, in: range, step: step)
+                // Snaps to `step` without drawing a tick per step, which crowds long ranges.
+                Slider(value: Binding(get: { value }, set: { value = ($0 / step).rounded() * step }), in: range)
                     .accessibilityLabel(title)
                     .accessibilityValue(text(value))
                 Text(text(value)).monospacedDigit().frame(width: 64, alignment: .trailing)
@@ -58,22 +59,32 @@ struct GeneralSettings: View {
 
     var body: some View {
         Form {
-            Section("Switching") {
+            Section {
                 LabeledSlider(title: "Delay before switching", value: $dwellMs, range: 100...1000, step: 50) { "\(Int($0)) ms" }
                 LabeledSlider(title: "Head turn needed", value: $headTurn, range: 0...1, step: 0.05) { "\(Int(($0 * 100).rounded()))%" }
                 Toggle("Wait while typing", isOn: $waitWhileTyping)
                 LabeledSlider(title: "Typing pause", value: $typingPause, range: 0.5...10, step: 0.5, text: seconds)
                     .disabled(!waitWhileTyping)
                 LabeledSlider(title: "Mouse quiet period", value: $mouseQuiet, range: 0.5...5, step: 0.1, text: seconds)
-                Toggle("Confirm mode: switch only when I double-tap Fn", isOn: $confirmMode)
+                Toggle("Switch only when I double-tap Fn", isOn: $confirmMode)
+            } header: {
+                Text("Switching")
+            } footer: {
+                Text("Glanzow moves focus once you've faced a new screen for the delay. Head turn needed sets how clearly you must face it. While you type or use the mouse, it waits.")
+                    .frame(maxWidth: .infinity, alignment: .leading).multilineTextAlignment(.leading)
             }
             Section("Feedback") {
                 Toggle("Move pointer with focus", isOn: $movePointer)
                 Toggle("Flash on switch", isOn: $flash)
                 Toggle("Show active window border", isOn: $border)
             }
-            Section("Learning") {
+            Section {
                 Toggle("Learn from clicks", isOn: $learn)
+            } header: {
+                Text("Learning")
+            } footer: {
+                Text("Each click fine-tunes the calibration for that screen. If clicks keep disagreeing with Glanzow, it suggests recalibrating.")
+                    .frame(maxWidth: .infinity, alignment: .leading).multilineTextAlignment(.leading)
             }
             Section("System") {
                 HotkeyRecorder()
@@ -213,7 +224,11 @@ struct CalibrationSettings: View {
         Form {
             Section {
                 ForEach(model.displays) { d in
-                    HStack {
+                    HStack(spacing: 10) {
+                        let ok = model.store.model(d.key).map { model.cameraID.isEmpty || $0.cameraID == model.cameraID } ?? false
+                        Image(systemName: ok ? "checkmark.circle.fill" : "exclamationmark.circle.fill")
+                            .foregroundStyle(ok ? .green : .orange)
+                            .accessibilityHidden(true)
                         VStack(alignment: .leading) {
                             Text(d.name)
                             Text(status(d)).font(.caption).foregroundStyle(.secondary)
@@ -224,7 +239,9 @@ struct CalibrationSettings: View {
                     }
                 }
             } footer: {
-                if model.displays.contains(where: \.ambiguous) { Text(AppModel.ambiguousNote) }
+                if model.displays.contains(where: \.ambiguous) {
+                    Text(AppModel.ambiguousNote).frame(maxWidth: .infinity, alignment: .leading).multilineTextAlignment(.leading)
+                }
             }
             Button("Recalibrate All Displays") { Task { await model.calibrate(nil) } }
                 .disabled(model.calibrating)

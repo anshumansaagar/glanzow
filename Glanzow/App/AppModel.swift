@@ -64,7 +64,7 @@ import GlanzowKit
         classifier: classifier, tuning: Tuning(defaults), focus: focusManager, input: input,
         systemBlock: { [focusManager] in await focusManager.blockingReason() })
     private let feedback = FocusFeedback()
-    private let notifier = Notifier()
+    private lazy var notifier = Notifier() // lazy: UNUserNotificationCenter needs a real .app bundle
     private var hotkey: Hotkey?
     private var hotkeySetting: (code: Int, modifiers: Int)?
     /// FR-SAF-04: lock, sleep, screensaver, fast user switching. Any reason stops the camera.
@@ -98,6 +98,10 @@ import GlanzowKit
     }
 
     init() { Pref.register() }
+
+    #if DEBUG
+    func preview(displays list: [DisplayInfo]) { displays = list }
+    #endif
 
     func start() {
         registry.start()
@@ -645,7 +649,13 @@ import GlanzowKit
 
     func showOnboarding() {
         if onboardingWindow == nil {
-            onboardingWindow = Self.window("Welcome to Glanzow", OnboardingView(model: self))
+            let w = Self.window("Welcome to Glanzow", OnboardingView(model: self))
+            // The night stage runs under a transparent title bar; the traffic lights sit on it.
+            w.styleMask.insert(.fullSizeContentView)
+            w.titlebarAppearsTransparent = true
+            w.titleVisibility = .hidden
+            w.isMovableByWindowBackground = true
+            onboardingWindow = w
         }
         Self.present(onboardingWindow!)
     }
