@@ -32,8 +32,18 @@ public final class EventTapInputMonitor: InputMonitor, @unchecked Sendable {
 
     /// Set before `start()`; called on the main thread.
     public var onClick: ((Click) -> Void)?
-    /// FR-SAF-08: Fn pressed twice within 0.4 s.
+    /// FR-SAF-08: the confirm key (`confirmFlag`, Fn by default) pressed twice within 0.4 s.
     public var onConfirm: ((TimeInterval) -> Void)?
+    public var confirmFlag: CGEventFlags = .maskSecondaryFn
+
+    public static func confirmFlag(named name: String) -> CGEventFlags {
+        switch name {
+        case "control": .maskControl
+        case "option": .maskAlternate
+        case "command": .maskCommand
+        default: .maskSecondaryFn
+        }
+    }
     /// Debug recorder hook: `.key` / `.mouse` activity timestamps.
     public var onActivity: ((RecordedEvent.Kind, TimeInterval) -> Void)?
 
@@ -85,7 +95,7 @@ public final class EventTapInputMonitor: InputMonitor, @unchecked Sendable {
             state.withLock { $0.key = t } // timestamp only
             onActivity?(.key, t)
         case .flagsChanged:
-            let fn = event.flags.contains(.maskSecondaryFn)
+            let fn = event.flags.contains(confirmFlag)
             let confirmed = state.withLock { s -> Bool in
                 defer { s.fnDown = fn }
                 guard fn, !s.fnDown else { return false } // press edge only

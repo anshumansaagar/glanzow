@@ -130,9 +130,10 @@ final class SwitchControllerTests: XCTestCase {
         assertCalls(await run([.key(0.9), .mouse(1.5), .look(from: 15, to: 75, yaw: 30)]), [(45.0 / 15, "R")])
     }
 
-    func test_FR_TRK_06_shortDropoutKeepsDwellButOneSecondResetsIt() async {
+    func test_FR_CLS_04_anyFaceDropoutRestartsDwell() async {
+        // Lost for two frames: the dwell restarts when the face returns at frame 19 → switch at frame 24.
         assertCalls(await run([.look(from: 15, to: 17, yaw: 30), .lost(from: 17, to: 19), .look(from: 19, to: 45, yaw: 30)]),
-                    [(20.0 / 15, "R")])
+                    [(24.0 / 15, "R")])
         // Lost for 1.2 s: dwell restarts when the face returns at frame 36 → switch at frame 41.
         assertCalls(await run([.look(from: 15, to: 18, yaw: 30), .lost(from: 18, to: 36), .look(from: 36, to: 60, yaw: 30)]),
                     [(41.0 / 15, "R")])
@@ -142,7 +143,7 @@ final class SwitchControllerTests: XCTestCase {
         assertCalls(await run([.look(from: 15, to: 45, yaw: 30)], blocked: "menu open"), [])
     }
 
-    func test_pausedNeverSwitches() async {
+    func test_FR_SAF_04_pausedNeverSwitches() async {
         assertCalls(await run([.look(from: 15, to: 45, yaw: 30)], paused: true), [])
     }
 
@@ -153,7 +154,7 @@ final class SwitchControllerTests: XCTestCase {
         assertCalls(await run([.key(1.4), .look(from: 15, to: 45, yaw: 30), .confirm(1.5)], tuning: t), [(1.5, "R")])
     }
 
-    func test_skippedFocusRetriesAfterOneSecond() async {
+    func test_FR_FOC_04_skippedFocusRetriesAfterOneSecond() async {
         // Skipped at frame 20; next attempt no earlier than 1 s later (frame 35).
         assertCalls(await run([.look(from: 15, to: 40, yaw: 30)], outcome: .skipped("excluded app")),
                     [(20.0 / 15, "R"), (35.0 / 15, "R")])

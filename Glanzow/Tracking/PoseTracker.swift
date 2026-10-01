@@ -131,10 +131,12 @@ public final class PoseTracker: NSObject, PoseSource, AVCaptureVideoDataOutputSa
               Double(face.confidence) >= minConfidence // §7: glasses, poor light, backlight → no face
         else { return .noFace(t) }
         let deg = 180 / Double.pi
-        // SPEC: §7 asks for "roll-compensated yaw; if roll > 30°, ignore sample". Vision already
-        // returns yaw, pitch and roll as separate Euler angles, so rotating yaw by roll again would
-        // count the tilt twice; only the 30° gate is applied. An ignored sample counts as no face,
-        // so a long tilt reads as "No face" and nothing switches.
+        // SPEC: §7 asks for "roll-compensated yaw; if roll > 30°, ignore sample". Only the 30° gate
+        // is applied. Whether tilt leaks into Vision's yaw and pitch depends on the order it
+        // composes the three angles, which Apple doesn't document; a guessed correction could add
+        // error rather than remove it. Measure first: record one session facing a single screen
+        // with the head tilted, replay it, and add the rotation only if yaw/pitch drift with roll.
+        // An ignored sample counts as no face, so a long tilt reads as "No face" and nothing switches.
         guard abs(roll * deg) <= 30 else { return .noFace(t) }
         var sample = PoseSample(timestamp: t, yaw: yaw * deg, pitch: pitch * deg, roll: roll * deg,
                                 faceScale: Double(face.boundingBox.width), confidence: Double(face.confidence))

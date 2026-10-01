@@ -32,6 +32,7 @@ public enum Pref {
     public static let excludedApps = "excludedApps"
     public static let showActiveBorder = "showActiveBorder"
     public static let confirmMode = "confirmMode"
+    public static let confirmKey = "confirmKey"   // fn, control, option, command
     public static let onboardingDone = "onboardingDone"
     public static let suggestedCallApps = "suggestedCallApps"
     // Hidden debug pane
@@ -58,6 +59,7 @@ public enum Pref {
         excludedApps: [String](),
         showActiveBorder: false,
         confirmMode: false,
+        confirmKey: "fn",
         onboardingDone: false,
         suggestedCallApps: [String](),
         minCutoff: 1.0,
@@ -79,7 +81,7 @@ func clamp<T: Comparable>(_ x: T, _ lo: T, _ hi: T) -> T { min(max(x, lo), hi) }
 /// clamped to the spec's ranges, since `defaults write` can put anything there.
 public struct Tuning: Sendable, Equatable {
     public var dwell: TimeInterval = 0.3               // FR-CLS-04
-    public var hysteresisFactor = 1.2                   // FR-CLS-03
+    public var hysteresisFactor = 1.4                   // FR-CLS-03 (default 50%)
     public var rejectThreshold = 4.0                    // FR-CLS-02
     public var typingPause: TimeInterval? = 3.0         // FR-SAF-01; nil = "Wait while typing" off
     public var typingOverride: TimeInterval = 1.0       // FR-SAF-01 sustained-turn override
@@ -98,9 +100,10 @@ public struct Tuning: Sendable, Equatable {
         confirmMode = d.bool(forKey: Pref.confirmMode)
     }
 
-    /// SPEC: "Head turn needed" 0–100% maps linearly to a hysteresis factor of 1.0–1.4, so the
-    /// 50% default is exactly FR-CLS-03's 1.2. Below 50% the user has chosen to switch more easily.
-    public static func hysteresisFactor(headTurn: Double) -> Double { 1 + 0.4 * clamp(headTurn, 0, 1) }
+    /// SPEC: FR-CLS-03 says "at least 1.2×", user-tunable. 0–100% maps linearly to 1.2–1.6, so
+    /// 1.2 is the floor and the 50% default is 1.4. Reading 50% as exactly 1.2 would let the
+    /// slider go below the floor, which switches more.
+    public static func hysteresisFactor(headTurn: Double) -> Double { 1.2 + 0.4 * clamp(headTurn, 0, 1) }
 }
 
 /// One Euro filter parameters (§6.2), exposed in the hidden debug pane.

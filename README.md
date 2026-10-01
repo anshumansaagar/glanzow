@@ -168,7 +168,12 @@ use exactly the code the app runs.
 - Window and split-pane focus within one screen (Phase 2) is not built.
 - The last window is remembered per display, not per Space; a window on a hidden Space falls
   back to the frontmost visible one.
-- Mission Control is detected by a window-layer heuristic. If Glanzow refuses to switch, the
-  debug overlay's "blocked by" line names the reason.
+- Mission Control is detected from the Dock's own open/close notifications. If Glanzow ever
+  refuses to switch, the debug overlay's "blocked by" line names the reason.
+- Head tilt is not corrected, only filtered (samples tilted over 30° are ignored); see the
+  `// SPEC:` note in `PoseTracker.swift` for the one recording that would settle it.
+- Pupil tracking exists but is off by default and unused by the V1 screen choice.
+- Call-app detection covers Zoom, Teams, FaceTime, Webex and Skype; browser calls and screen
+  sharing need adding to Excluded Apps by hand.
 - The performance, accuracy and false-switch targets (NFR-01 to NFR-06) need measuring on real
   hardware with the camera running; see the event log above.

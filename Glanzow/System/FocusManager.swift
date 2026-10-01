@@ -142,13 +142,7 @@ public struct FocusOptions: Sendable {
         if wins.contains(where: { $0.owner == "screencaptureui" }) { return "screenshot tool" }
         let menuLevel = Int(CGWindowLevelForKey(.popUpMenuWindow))
         if wins.contains(where: { $0.layer == menuLevel && $0.alpha > 0 }) { return "menu open" }
-        // ponytail: Mission Control shows as Dock-owned windows covering a whole display; a
-        // private CGS query would be exact if this heuristic ever misfires.
-        let dockLevel = Int(CGWindowLevelForKey(.dockWindow))
-        if wins.contains(where: { w in
-            w.owner == "Dock" && w.layer >= dockLevel && w.alpha > 0
-                && displays.displays.contains { overlapArea(w.bounds, $0.bounds) >= 0.9 * $0.bounds.width * $0.bounds.height }
-        }) { return "Mission Control" }
+        if windows.missionControlActive { return "Mission Control" }
         // FR-SAF-06 by AX role: modal dialogs and sheets in the frontmost app.
         if let pid = front?.processIdentifier, pid != ownPID,
            let win = AXUIElement.application(pid).element(kAXFocusedWindowAttribute) {

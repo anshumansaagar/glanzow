@@ -75,12 +75,11 @@ public actor SwitchController {
         lastTime = e.timestamp
         switch e {
         case .noFace(let t):
-            // FR-TRK-06: after 1 s without a face, forget any pending target. Shorter dropouts
-            // (a blink, a hand) keep the dwell running.
-            if !noFace, t - lastFace >= tuning.noFaceTimeout {
-                noFace = true
-                pending = nil
-            }
+            // SPEC: FR-CLS-04 says the candidate must win "continuously", so any frame without a
+            // face restarts the dwell (and with it the 1 s typing override). Switches less than
+            // carrying the dwell across short dropouts. FR-TRK-06's "No face" state still waits 1 s.
+            pending = nil
+            if !noFace, t - lastFace >= tuning.noFaceTimeout { noFace = true }
         case .pose(let s):
             lastFace = s.timestamp
             noFace = false
@@ -108,11 +107,11 @@ public actor SwitchController {
             return
         }
         guard d != current, t - pendingSince >= tuning.dwell else { return } // FR-CLS-04
-        if tuning.confirmMode { blockedBy = "waiting for Fn double-tap"; return } // FR-SAF-08
+        if tuning.confirmMode { blockedBy = "waiting for confirm double-tap"; return } // FR-SAF-08
         await attempt(d, at: t, confirmed: false)
     }
 
-    /// FR-SAF-08: the user double-tapped Fn while facing a display: switch now, no dwell or typing wait.
+    /// FR-SAF-08: the user double-tapped the confirm key while facing a display: switch now, no dwell or typing wait.
     public func confirm(at t: TimeInterval) async {
         guard !paused, !noFace, case .candidate(let d)? = latest, d != current else { return }
         if pending != d {

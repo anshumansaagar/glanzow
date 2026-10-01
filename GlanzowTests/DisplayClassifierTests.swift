@@ -39,10 +39,12 @@ final class DisplayClassifierTests: XCTestCase {
         XCTAssertEqual(classifier.classify(at(1), current: "C"), .candidate("C"))
     }
 
-    func test_FR_CLS_03_zeroHeadTurnRemovesHysteresis() {
-        let loose = MahalanobisClassifier(models: [model("C", yaw: 0), model("R", yaw: 30)],
-                                          hysteresisFactor: Tuning.hysteresisFactor(headTurn: 0))
-        XCTAssertEqual(loose.classify(at(16), current: "C"), .candidate("R"))
+    func test_FR_CLS_03_headTurnSettingNeverGoesBelowTheSpecFloor() {
+        XCTAssertEqual(Tuning.hysteresisFactor(headTurn: 0), 1.2, accuracy: 1e-12)
+        XCTAssertEqual(Tuning.hysteresisFactor(headTurn: 1), 1.6, accuracy: 1e-12)
+        let loosest = MahalanobisClassifier(models: [model("C", yaw: 0), model("R", yaw: 30)],
+                                            hysteresisFactor: Tuning.hysteresisFactor(headTurn: 0))
+        XCTAssertEqual(loosest.classify(at(16), current: "C"), .stay)
     }
 
     func test_FR_CAL_08_leaningInShrinksOffsetsBackToCalibrationDistance() {

@@ -26,7 +26,7 @@ final class CalibrationMathTests: XCTestCase {
         XCTAssertNil(DisplayModel.fit(key: "k", name: "A", cameraID: "c", samples: Array(samples.prefix(DisplayModel.minSamples - 1))))
     }
 
-    func test_regularisationAddsOneDegreeSquaredAndInverts() throws {
+    func test_FR_CLS_01_regularisationAddsOneDegreeSquaredAndInverts() throws {
         let c = Cov2(xx: 4, xy: 2, yy: 1) // singular: det 0
         XCTAssertNil(c.inverse)
         let r = c.regularized()
@@ -63,7 +63,7 @@ final class CalibrationMathTests: XCTestCase {
         XCTAssertEqual(reloaded.uncalibrated([d], cameraID: "other camera").map(\.key), ["1-2-3"])
     }
 
-    func test_mirrorCheck_yawMustBeMonotonicLeftToRight() {
+    func test_FR_CAL_05_mirrorCheck_yawMustBeMonotonicLeftToRight() {
         func pair(_ x: CGFloat, _ yaw: Double) -> (display: DisplayInfo, model: DisplayModel) {
             (DisplayInfo(id: 0, key: "\(x)", name: "", bounds: CGRect(x: x, y: 0, width: 1920, height: 1080), isBuiltin: false),
              DisplayModel(key: "\(x)", name: "", mean: SIMD2(yaw, 0), covariance: Cov2(xx: 1, xy: 0, yy: 1),

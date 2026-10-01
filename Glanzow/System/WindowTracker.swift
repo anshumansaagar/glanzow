@@ -15,6 +15,11 @@ import os
     /// An AX call reported the API disabled: Accessibility was revoked (§7).
     public var onAXDisabled: (@Sendable () -> Void)?
 
+    /// FR-SAF-06: Mission Control is open (from the Dock's own Exposé notifications).
+    public var missionControlActive: Bool { missionControlSince.map { now() - $0 < 60 } ?? false }
+    private var missionControlSince: TimeInterval?
+    private var dockObserver: (pid: pid_t, observer: AXObserver)?
+
     private let displays: DisplayRegistry
     private var observers: [pid_t: AXObserver] = [:]
     private let ownPID = ProcessInfo.processInfo.processIdentifier
@@ -41,7 +46,14 @@ import os
         center.addObserver(forName: NSWorkspace.activeSpaceDidChangeNotification, object: nil, queue: nil) { [weak self] _ in
             Task { @AXActor in self?.refreshFrontmost() }
         }
-        Task { @AXActor in self.refreshFrontmost() }
+        center.addObserver(forName: NSWorkspace.didLaunchApplicationNotification, object: nil, queue: nil) { [weak self] note in
+            guard (note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication)?.bundleIdentifier == "com.apple.dock" else { return }
+            Task { @AXActor in self?.observeDock() } // the Dock was restarted
+        }
+        Task { @AXActor in
+            self.observeDock()
+            self.refreshFrontmost()
+        }
     }
 
     func refreshFrontmost() {
@@ -50,12 +62,17 @@ import os
     }
 
     private func activated(_ pid: pid_t) {
+        missionControlSince = nil // picking a window in Mission Control activates its app
         guard pid != ownPID else { return }
         observe(pid)
         refresh(pid)
     }
 
     private func terminated(_ pid: pid_t) {
+        if dockObserver?.pid == pid {
+            dockObserver = nil
+            missionControlSince = nil
+        }
         if let o = observers.removeValue(forKey: pid) {
             CFRunLoopRemoveSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(o), .commonModes)
         }
@@ -79,6 +96,28 @@ import os
         // flowing while a menu or alert is open. They only hop back to this actor.
         CFRunLoopAddSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(observer), .commonModes)
         observers[pid] = observer
+    }
+
+    /// The Dock posts these when Mission Control, App Exposé or Show Desktop open and close
+    /// (the same signal yabai uses). Window geometry can't tell: on recent macOS the Dock keeps a
+    /// full-screen window at the Dock level even when nothing is showing.
+    func observeDock() {
+        guard let dock = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.dock").first,
+              dockObserver?.pid != dock.processIdentifier else { return }
+        var observer: AXObserver?
+        guard AXObserverCreate(dock.processIdentifier, dockCallback, &observer) == .success, let observer else { return }
+        let app = AXUIElement.application(dock.processIdentifier)
+        let refcon = Unmanaged.passUnretained(self).toOpaque()
+        for n in ["AXExposeShowAllWindows", "AXExposeShowFrontWindows", "AXExposeShowDesktop", "AXExposeExit"] {
+            AXObserverAddNotification(observer, app, n as CFString, refcon)
+        }
+        CFRunLoopAddSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(observer), .commonModes)
+        dockObserver = (dock.processIdentifier, observer)
+    }
+
+    fileprivate func exposeChanged(_ name: String) {
+        // A missed exit can't block switching for ever: the flag also expires after 60 s.
+        missionControlSince = name == "AXExposeExit" ? nil : now()
     }
 
     fileprivate func notified(_ pid: pid_t) {
@@ -112,6 +151,13 @@ import os
         lastFocused[key] = ref
         focused = ref
     }
+}
+
+private let dockCallback: AXObserverCallback = { _, _, notification, refcon in
+    guard let refcon else { return }
+    let tracker = Unmanaged<WindowTracker>.fromOpaque(refcon).takeUnretainedValue()
+    let name = notification as String
+    Task { @AXActor in tracker.exposeChanged(name) }
 }
 
 private let axCallback: AXObserverCallback = { _, element, _, refcon in

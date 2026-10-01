@@ -69,15 +69,21 @@ public final class DisplayRegistry: @unchecked Sendable {
     private var pending: DispatchWorkItem?
     /// Called on the main thread after the display set or arrangement settles.
     public var onChange: (@MainActor ([DisplayInfo]) -> Void)?
+    /// Called on the main thread as soon as a change starts, before the map is rebuilt.
+    public var onChangeBegan: (@MainActor () -> Void)?
 
     public var displays: [DisplayInfo] { state.withLock { $0 } }
 
     @MainActor public func start() {
         refresh()
         CGDisplayRegisterReconfigurationCallback({ _, flags, info in
-            guard !flags.contains(.beginConfigurationFlag), let info else { return }
+            guard let info else { return }
             let me = Unmanaged<DisplayRegistry>.fromOpaque(info).takeUnretainedValue()
-            DispatchQueue.main.async { me.scheduleRefresh() }
+            let began = flags.contains(.beginConfigurationFlag)
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated { if began { me.onChangeBegan?() } }
+                me.scheduleRefresh() // also after "began", in case no end event follows
+            }
         }, Unmanaged.passUnretained(self).toOpaque())
     }
 

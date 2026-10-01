@@ -52,6 +52,7 @@ struct GeneralSettings: View {
     @AppStorage(Pref.typingPause) private var typingPause = 3.0
     @AppStorage(Pref.mouseQuiet) private var mouseQuiet = 1.5
     @AppStorage(Pref.confirmMode) private var confirmMode = false
+    @AppStorage(Pref.confirmKey) private var confirmKey = "fn"
     @AppStorage(Pref.movePointer) private var movePointer = true
     @AppStorage(Pref.flashOnSwitch) private var flash = true
     @AppStorage(Pref.showActiveBorder) private var border = false
@@ -66,7 +67,14 @@ struct GeneralSettings: View {
                 LabeledSlider(title: "Typing pause", value: $typingPause, range: 0.5...10, step: 0.5, text: seconds)
                     .disabled(!waitWhileTyping)
                 LabeledSlider(title: "Mouse quiet period", value: $mouseQuiet, range: 0.5...5, step: 0.1, text: seconds)
-                Toggle("Switch only when I double-tap Fn", isOn: $confirmMode)
+                Toggle("Switch only when I confirm", isOn: $confirmMode)
+                Picker("Confirm by double-tapping", selection: $confirmKey) {
+                    Text("Fn").tag("fn")
+                    Text("⌃ Control").tag("control")
+                    Text("⌥ Option").tag("option")
+                    Text("⌘ Command").tag("command")
+                }
+                .disabled(!confirmMode)
             } header: {
                 Text("Switching")
             } footer: {
@@ -257,7 +265,9 @@ struct CalibrationSettings: View {
     }
 }
 
-/// FR-SAF-05: rebind the pause shortcut. Needs ⌘, ⌥ or ⌃ so it can't swallow normal typing.
+/// FR-SAF-05: rebind the pause shortcut.
+/// SPEC: §3.9 says "Any". A shortcut without ⌘, ⌥ or ⌃ would be a global hot key on a plain
+/// letter and swallow that letter in every app, so one of those modifiers is required.
 struct HotkeyRecorder: View {
     @AppStorage(Pref.hotkeyLabel) private var label = "⇧⌘G"
     @State private var recording = false

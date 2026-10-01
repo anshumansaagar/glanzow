@@ -49,6 +49,8 @@ import GlanzowKit
     @Published private(set) var isRecording = false
     @Published private(set) var calibrating = false
     @Published private(set) var uncalibrated: [DisplayInfo] = []
+    /// FR-CAL-07: displays are changing; the old map can't be trusted until it is rebuilt.
+    private var reconfiguring = false { didSet { reconcile() } }
 
     let defaults = UserDefaults.standard
     let registry = DisplayRegistry.shared
@@ -108,6 +110,7 @@ import GlanzowKit
         registry.start()
         displays = registry.displays
         registry.onChange = { [weak self] list in self?.displaysChanged(list) }
+        registry.onChangeBegan = { [weak self] in self?.reconfiguring = true }
         menu = MenuBarController(model: self)
         camera.onState = { [weak self] s in self?.cameraChanged(s) }
         observers.append(NotificationCenter.default.addObserver(forName: UserDefaults.didChangeNotification, object: nil, queue: .main) { [weak self] _ in
@@ -197,7 +200,7 @@ import GlanzowKit
         let running: Bool = { if case .running = cameraState { return true }; return false }()
         // SPEC: FR-CAL-07 says pause and prompt. Switching stays off until every connected display
         // is calibrated: looking at an unknown display would otherwise read as its neighbour.
-        let wantSwitching = cameraWanted && running && permissionsGranted && !calibrating && uncalibrated.isEmpty
+        let wantSwitching = cameraWanted && running && permissionsGranted && !calibrating && !reconfiguring && uncalibrated.isEmpty
             && !classifier.keys.isEmpty && defaults.bool(forKey: Pref.onboardingDone)
         if wantSwitching != switchingEnabled {
             switchingEnabled = wantSwitching
@@ -249,6 +252,7 @@ import GlanzowKit
             rebuildModels()
         }
         if !defaults.bool(forKey: Pref.showActiveBorder) { feedback.showActive(nil) }
+        input.confirmFlag = EventTapInputMonitor.confirmFlag(named: defaults.string(forKey: Pref.confirmKey) ?? "fn")
         let key = (defaults.integer(forKey: Pref.hotkeyCode), defaults.integer(forKey: Pref.hotkeyModifiers))
         if hotkeySetting.map({ $0 != key }) ?? true {
             hotkeySetting = key
@@ -357,7 +361,7 @@ import GlanzowKit
     private func displaysChanged(_ list: [DisplayInfo]) {
         displays = list
         rebuildModels()
-        reconcile()
+        reconfiguring = false // reconciles
         promptIfUncalibrated()
     }
 
