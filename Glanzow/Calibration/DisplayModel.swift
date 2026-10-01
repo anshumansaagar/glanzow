@@ -34,14 +34,16 @@ public struct DisplayModel: Codable, Sendable, Equatable {
     public var cameraID: String
     public var sampleCount: Int
     public var calibratedAt: Date
+    /// FR-P2-01: gaze position within this display. Nil for calibrations made before Phase 2.
+    public var gaze: GazeMap?
 
     public static let minSamples = 15
 
     public init(key: DisplayKey, name: String, mean: SIMD2<Double>, covariance: Cov2, meanFaceScale: Double,
-                cameraID: String, sampleCount: Int, calibratedAt: Date = Date()) {
+                cameraID: String, sampleCount: Int, calibratedAt: Date = Date(), gaze: GazeMap? = nil) {
         self.key = key; self.name = name; self.mean = mean; self.covariance = covariance
         self.meanFaceScale = meanFaceScale; self.cameraID = cameraID; self.sampleCount = sampleCount
-        self.calibratedAt = calibratedAt
+        self.calibratedAt = calibratedAt; self.gaze = gaze
     }
 
     /// Mean and unbiased sample covariance of (yaw, pitch), plus mean face scale.

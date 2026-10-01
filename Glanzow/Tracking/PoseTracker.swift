@@ -69,6 +69,8 @@ public final class PoseTracker: NSObject, PoseSource, AVCaptureVideoDataOutputSa
     private struct Config {
         var smoothing = SmoothingParams()
         var trackPupils = false
+        /// Landmarks on every n-th frame; the last pupil reading is reused in between.
+        var pupilStride = 2
         var minInterval = 1.0 / 15
         var minConfidence = 0.6
         var rawTap: (@Sendable (PoseEvent) -> Void)?
@@ -81,6 +83,8 @@ public final class PoseTracker: NSObject, PoseSource, AVCaptureVideoDataOutputSa
     private var smootherParams = SmoothingParams()
     private var previousCenter: CGPoint?
     private var lastProcessed = -Double.infinity
+    private var frameIndex = 0
+    private var lastPupil: (t: TimeInterval, offset: SIMD2<Double>)?
     private let handler = VNSequenceRequestHandler()
     private let faceRequest: VNDetectFaceRectanglesRequest = {
         let r = VNDetectFaceRectanglesRequest()
@@ -91,8 +95,9 @@ public final class PoseTracker: NSObject, PoseSource, AVCaptureVideoDataOutputSa
 
     public func events() -> AsyncStream<PoseEvent> { output.stream() }
 
-    public func configure(smoothing: SmoothingParams, trackPupils: Bool) {
-        config.withLock { $0.smoothing = smoothing; $0.trackPupils = trackPupils }
+    /// `pupilStride` 1 measures pupils on every frame (calibration); 2 halves the landmark cost.
+    public func configure(smoothing: SmoothingParams, trackPupils: Bool, pupilStride: Int = 2) {
+        config.withLock { $0.smoothing = smoothing; $0.trackPupils = trackPupils; $0.pupilStride = max(pupilStride, 1) }
     }
 
     /// Software cap that backs up the camera's own frame-rate setting (some cameras ignore it).
@@ -110,7 +115,15 @@ public final class PoseTracker: NSObject, PoseSource, AVCaptureVideoDataOutputSa
             smootherParams = cfg.smoothing
             smoother = PoseSmoother(cfg.smoothing)
         }
-        let raw = detect(pixels, at: t, pupils: cfg.trackPupils, minConfidence: cfg.minConfidence)
+        frameIndex += 1
+        let measurePupils = cfg.trackPupils && frameIndex % cfg.pupilStride == 0
+        var raw = detect(pixels, at: t, pupils: measurePupils, minConfidence: cfg.minConfidence)
+        if case .pose(var s) = raw, cfg.trackPupils {
+            // ponytail: half-rate landmarks (NFR-04 CPU); the in-between frame reuses a reading
+            // under 0.25 s old. Every frame if within-screen focus ever needs it faster.
+            if let p = s.pupilOffset { lastPupil = (t, p) } else if let last = lastPupil, t - last.t < 0.25 { s.pupilOffset = last.offset }
+            raw = .pose(s)
+        }
         cfg.rawTap?(raw)
         switch raw {
         case .pose(let s): self.output.send(.pose(smoother(s)))

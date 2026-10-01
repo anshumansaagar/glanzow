@@ -89,7 +89,9 @@ import os
         // A just-launched app often can't answer yet; without the focus notification there is
         // nothing to keep, so try again on its next activation.
         guard AXObserverAddNotification(observer, app, kAXFocusedWindowChangedNotification as CFString, refcon) == .success else { return }
-        for n in [kAXMainWindowChangedNotification, kAXWindowMovedNotification, kAXWindowResizedNotification, kAXWindowMiniaturizedNotification] {
+        // Focused-element changes catch a click into another split pane (FR-P2-02).
+        for n in [kAXMainWindowChangedNotification, kAXWindowMovedNotification, kAXWindowResizedNotification,
+                  kAXWindowMiniaturizedNotification, kAXFocusedUIElementChangedNotification] {
             AXObserverAddNotification(observer, app, n as CFString, refcon)
         }
         // Callbacks need a run loop; the main one is always there. Common modes keep them

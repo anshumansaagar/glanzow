@@ -25,16 +25,17 @@ import QuartzCore
         var outcome = Outcome(models: [], failed: [])
         let ordered = targets.sorted(by: { $0.bounds.minX < $1.bounds.minX })
         for (i, d) in ordered.enumerated() {
-            focus(on: d, title: "Follow the light", subtitle: "Turn your head with it, the way you would naturally look at this screen.")
+            focus(on: d, title: "Follow the light", subtitle: "Look at it the way you naturally would, with your head and eyes.")
             let view = windows[d.key]!.dotView
             let points = Self.points(for: d, among: all)
             view.setProgress(ordered.count > 1 ? "Screen \(i + 1) of \(ordered.count)" : "")
             view.moveDot(to: view.local(points[0], in: d), animated: false)
             guard await pause(2.0) else { return nil }
-            view.setText(title: "", subtitle: "Turn your head, not just your eyes")
+            view.setText(title: "", subtitle: "Keep looking at the light")
             // FR-CAL-01: about 20 s per display, split across its points.
             let hold = min(max(20 / Double(points.count) - 0.45, 1.6), 3.0)
-            var windowsOfInterest: [ClosedRange<TimeInterval>] = []
+            // Each hold: when samples count, and where the light was (normalised, for the gaze map).
+            var windowsOfInterest: [(range: ClosedRange<TimeInterval>, target: SIMD2<Double>)] = []
             samples.removeAll()
             for (j, p) in points.enumerated() {
                 view.setProgress(ordered.count > 1 ? "Screen \(i + 1) of \(ordered.count), point \(j + 1) of \(points.count)"
@@ -46,10 +47,14 @@ import QuartzCore
                 guard await pause(hold) else { return nil }
                 view.release()
                 // FR-CAL-02: only while the dot is still and a face is seen; skip the first 300 ms.
-                windowsOfInterest.append((arrived + 0.3)...now())
+                let target = SIMD2(Double((p.x - d.bounds.minX) / d.bounds.width), Double((p.y - d.bounds.minY) / d.bounds.height))
+                windowsOfInterest.append(((arrived + 0.3)...now(), target))
             }
-            let kept = samples.filter { s in windowsOfInterest.contains { $0.contains(s.timestamp) } }
-            if let m = DisplayModel.fit(key: d.key, name: d.name, cameraID: cameraID, samples: kept) {
+            let pairs = samples.compactMap { s in
+                windowsOfInterest.first { $0.range.contains(s.timestamp) }.map { (sample: s, target: $0.target) }
+            }
+            if var m = DisplayModel.fit(key: d.key, name: d.name, cameraID: cameraID, samples: pairs.map(\.sample)) {
+                m.gaze = GazeMap.fit(pairs) // FR-P2-01
                 outcome.models.append(m)
             } else {
                 outcome.failed.append(d)

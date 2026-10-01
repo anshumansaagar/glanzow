@@ -12,6 +12,8 @@ public protocol DisplayClassifier: Sendable {
     func classify(_ sample: PoseSample, current: DisplayKey?) -> Classification
     /// Mahalanobis distance from the sample to every display, nearest first.
     func distances(_ sample: PoseSample) -> [(key: DisplayKey, distance: Double)]
+    /// FR-P2-01: normalised gaze point on display `key`, nil without a gaze map.
+    func gazePoint(_ sample: PoseSample, on key: DisplayKey) -> SIMD2<Double>?
 }
 
 /// §6.3 nearest-cluster classifier on (yaw, pitch), with §6.5 distance compensation.
@@ -30,6 +32,8 @@ public struct MahalanobisClassifier: DisplayClassifier {
     let neutral: SIMD2<Double>
     let calibratedScale: Double
     public let compensateDistance: Bool
+    /// FR-P2-01 gaze maps of the displays that have one.
+    public let gaze: [DisplayKey: GazeMap]
 
     public init(models: [DisplayModel], rejectThreshold: Double = 4.0, hysteresisFactor: Double = 1.2, compensateDistance: Bool = true) {
         clusters = models.map { Cluster(key: $0.key, mean: $0.mean, inverse: $0.covariance.regularized().inverse ?? Cov2(xx: 1, xy: 0, yy: 1)) }
@@ -39,6 +43,13 @@ public struct MahalanobisClassifier: DisplayClassifier {
         let n = Double(max(models.count, 1))
         neutral = models.reduce(SIMD2<Double>.zero) { $0 + $1.mean } / n
         calibratedScale = models.reduce(0) { $0 + $1.meanFaceScale } / n
+        gaze = Dictionary(models.compactMap { m in m.gaze.map { (m.key, $0) } }, uniquingKeysWith: { a, _ in a })
+    }
+
+    /// Normalised gaze point on display `key` (0…1 each way, may fall slightly outside), or nil if
+    /// that display has no gaze map.
+    public func gazePoint(_ s: PoseSample, on key: DisplayKey) -> SIMD2<Double>? {
+        gaze[key]?.point(s, angles: compensated(s))
     }
 
     public var keys: [DisplayKey] { clusters.map(\.key) }

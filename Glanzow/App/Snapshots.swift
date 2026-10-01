@@ -24,6 +24,7 @@ import GlanzowKit
         }
         let settings = NSHostingView(rootView: SettingsView(model: model, showDebug: false))
         save(settings, size: CGSize(width: 520, height: 560), dir.appending(path: "settings.png"))
+        save(FocusFeedback.preview(), size: CGSize(width: 900, height: 360), dir.appending(path: "flash.png"))
         let calibration = CalibrationOverlay.preview(size: CGSize(width: 1440, height: 900))
         save(calibration, size: CGSize(width: 1440, height: 900), dir.appending(path: "calibration.png"))
         print("snapshots written to \(dir.path)")

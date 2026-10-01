@@ -13,6 +13,10 @@ actor FakeFocus: FocusPerformer {
         calls.append(display)
         return outcome
     }
+    func focus(region: Region) -> FocusOutcome {
+        calls.append("@" + region.id)
+        return outcome
+    }
     func set(_ o: FocusOutcome) { outcome = o }
 }
 
@@ -27,20 +31,23 @@ final class SwitchControllerTests: XCTestCase {
         case confirm(Double)
     }
 
+    /// C also has a gaze map: x = 0.5 + yaw/40, y = 0.5 + pitch/30 (head only).
     private static let classifier = MahalanobisClassifier(models: [
-        DisplayModel(key: "C", name: "C", mean: SIMD2(0, 0), covariance: Cov2(xx: 36, xy: 0, yy: 36), meanFaceScale: 0.2, cameraID: "", sampleCount: 50),
+        DisplayModel(key: "C", name: "C", mean: SIMD2(0, 0), covariance: Cov2(xx: 36, xy: 0, yy: 36), meanFaceScale: 0.2, cameraID: "", sampleCount: 50,
+                     gaze: GazeMap(head: [[0.5, 1.0 / 40, 0], [0.5, 0, 1.0 / 30]], eyes: nil, headError: 0.05, eyesError: nil)),
         DisplayModel(key: "R", name: "R", mean: SIMD2(30, 0), covariance: Cov2(xx: 36, xy: 0, yy: 36), meanFaceScale: 0.2, cameraID: "", sampleCount: 50),
     ])
 
     /// Runs the steps in time order; returns (time, display) for every focus call.
-    private func run(_ steps: [Step], tuning: Tuning = Tuning(), outcome: FocusOutcome = .focusedWindow,
-                     blocked: String? = nil, paused: Bool = false) async -> [(t: Double, d: DisplayKey)] {
+    fileprivate func run(_ steps: [Step], tuning: Tuning = Tuning(), outcome: FocusOutcome = .focusedWindow,
+                     blocked: String? = nil, paused: Bool = false, layout: ScreenLayout? = nil) async -> [(t: Double, d: DisplayKey)] {
         let input = FakeInput()
         let focus = FakeFocus()
         await focus.set(outcome)
         let c = SwitchController(classifier: Self.classifier, tuning: tuning, focus: focus, input: input, systemBlock: { blocked })
         await c.setCurrent("C")
         await c.setPaused(paused)
+        await c.update(layout: layout)
 
         var timeline: [(t: Double, order: Int, act: () async -> Void)] = []
         for (i, step) in steps.enumerated() {
@@ -158,5 +165,49 @@ final class SwitchControllerTests: XCTestCase {
         // Skipped at frame 20; next attempt no earlier than 1 s later (frame 35).
         assertCalls(await run([.look(from: 15, to: 40, yaw: 30)], outcome: .skipped("excluded app")),
                     [(20.0 / 15, "R"), (35.0 / 15, "R")])
+    }
+}
+
+/// FR-P2-01…04 timelines: two windows side by side on display C (1000×1000), left one focused.
+final class RegionSwitchTests: XCTestCase {
+    private let left = Region(id: "w1", windowID: 1, pid: 1, frame: CGRect(x: 0, y: 0, width: 500, height: 1000), isPane: false)
+    private let right = Region(id: "w2", windowID: 2, pid: 2, frame: CGRect(x: 500, y: 0, width: 500, height: 1000), isPane: false)
+    private var layout: ScreenLayout {
+        ScreenLayout(display: "C", bounds: CGRect(x: 0, y: 0, width: 1000, height: 1000), regions: [left, right], focused: "w1")
+    }
+    private let harness = SwitchControllerTests()
+
+    // Yaw 8 → gaze x 700: well inside the right window. Region dwell 0.45 s from frame 15 → frame 22.
+
+    func test_FR_P2_01_lookingAtTheOtherWindowFocusesIt() async {
+        let calls = await harness.runForTests([.look(from: 0, to: 15, yaw: -8), .look(from: 15, to: 45, yaw: 8)], layout: layout)
+        XCTAssertEqual(calls.map(\.d), ["@w2"])
+        XCTAssertEqual(calls.first?.t ?? 0, 22.0 / 15, accuracy: 1e-9)
+    }
+
+    func test_FR_P2_01_nearTheBorderStaysOnTheFocusedWindow() async {
+        // Yaw 0.8 → x 520: inside the left window's 50 px hysteresis margin.
+        let calls = await harness.runForTests([.look(from: 0, to: 60, yaw: 0.8)], layout: layout)
+        XCTAssertTrue(calls.isEmpty, "\(calls)")
+    }
+
+    func test_FR_P2_04_typingHoldsWindowsWithNoOverride() async {
+        // Typed at 0.9 s: nothing moves until the 3 s typing pause ends (3.9 s → frame 59).
+        let calls = await harness.runForTests([.key(0.9), .look(from: 15, to: 75, yaw: 8)], layout: layout)
+        XCTAssertEqual(calls.map(\.d), ["@w2"])
+        XCTAssertEqual(calls.first?.t ?? 0, 59.0 / 15, accuracy: 1e-9)
+    }
+
+    func test_FR_P2_01_offWhenTheSettingIsOff() async {
+        var t = Tuning()
+        t.focusWithinScreen = false
+        let calls = await harness.runForTests([.look(from: 15, to: 45, yaw: 8)], tuning: t, layout: layout)
+        XCTAssertTrue(calls.isEmpty)
+    }
+}
+
+extension SwitchControllerTests {
+    func runForTests(_ steps: [Step], tuning: Tuning = Tuning(), layout: ScreenLayout? = nil) async -> [(t: Double, d: DisplayKey)] {
+        await run(steps, tuning: tuning, layout: layout)
     }
 }

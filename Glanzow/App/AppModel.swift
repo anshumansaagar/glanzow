@@ -86,6 +86,7 @@ import GlanzowKit
     private var callbacksWired = false
     private var lastSwitchAt = -Double.infinity
     private var snapshot: SwitchController.Snapshot?
+    private var layoutPoke: AsyncStream<Void>.Continuation?
     private var learning = LearningEngine()
     private var governor = FrameRateGovernor()
     private var saveScheduled = false
@@ -131,6 +132,7 @@ import GlanzowKit
             for await e in decisions { await controller.handle(e) }
         })
         wireCallbacks()
+        startLayoutLoop()
         observeSystem()
         hotkey = Hotkey { [weak self] in self?.userPaused.toggle() }
         notifier.onExclude = { [weak self] bundle in self?.exclude(bundle) }
@@ -162,6 +164,7 @@ import GlanzowKit
                 onAXDisabled: { [weak self] in Task { @MainActor in self?.accessibilityLost() } })
             await windows.setCallbacks(
                 onFocus: { [weak self] key, ref in
+                    Task { @MainActor in self?.layoutPoke?.yield(()) }
                     // A window-less app keeps the last display as current (switch less).
                     if let key { Task { await controller.setCurrent(key) } }
                     let frame = ref?.frame
@@ -172,6 +175,33 @@ import GlanzowKit
         input.onClick = { [weak self] click in self?.clicked(click) }
         input.onConfirm = { t in Task { await controller.confirm(at: t) } }
         input.onActivity = { [recorder] kind, t in recorder.record(kind, at: t) }
+    }
+
+    /// FR-P2: keeps the controller's picture of the current display's windows and panes fresh.
+    /// Rebuilt on every focus change and switch, and at least once a second, at most 4 times a second.
+    private func startLayoutLoop() {
+        let (pokes, poke) = AsyncStream<Void>.makeStream(bufferingPolicy: .bufferingNewest(1))
+        layoutPoke = poke
+        let controller = controller, focusManager = focusManager
+        tasks.append(Task.detached {
+            for await _ in pokes {
+                let d = UserDefaults.standard
+                if d.bool(forKey: Pref.focusWithinScreen), let current = await controller.current {
+                    let layout = await focusManager.layout(for: current, panes: d.bool(forKey: Pref.focusPanes))
+                    await controller.update(layout: layout)
+                } else {
+                    await controller.update(layout: nil)
+                }
+                try? await Task.sleep(for: .milliseconds(250))
+            }
+        })
+        tasks.append(Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(1))
+                guard let self else { return }
+                if self.switchingEnabled { self.layoutPoke?.yield(()) }
+            }
+        })
     }
 
     /// Window tracking and the input tap need Accessibility; start them once it is granted.
@@ -245,7 +275,11 @@ import GlanzowKit
 
     /// Re-reads settings after any UserDefaults change; cheap and idempotent.
     private func applySettings() {
-        tracker.configure(smoothing: SmoothingParams(defaults), trackPupils: defaults.bool(forKey: Pref.trackPupils))
+        // FR-P2-01 needs eye offsets; landmarks run on every other frame to hold CPU near NFR-04.
+        tracker.configure(smoothing: SmoothingParams(defaults),
+                          trackPupils: defaults.bool(forKey: Pref.trackPupils) || defaults.bool(forKey: Pref.focusWithinScreen) || calibrating,
+                          pupilStride: calibrating ? 1 : 2)
+        layoutPoke?.yield(())
         let tuning = Tuning(defaults)
         Task { await controller.update(tuning: tuning) }
         if tuning.rejectThreshold != classifier.rejectThreshold || tuning.hysteresisFactor != classifier.hysteresisFactor {
@@ -290,7 +324,8 @@ import GlanzowKit
             if t - lastFaceTime >= 1 { setFaceVisible(false) } // FR-TRK-06
         }
         if let debugOverlay {
-            let gaze = lastSample.flatMap { s -> CGPoint? in
+            // The controller's gaze point when there is one (FR-P2), else the centre of the screen faced.
+            let gaze = snapshot?.gaze ?? lastSample.flatMap { s -> CGPoint? in
                 guard faceVisible, case .candidate(let key) = classifier.classify(s, current: nil),
                       let d = registry.display(key) else { return nil }
                 return CGPoint(x: d.bounds.midX, y: d.bounds.midY)
@@ -334,6 +369,11 @@ import GlanzowKit
             lines.append("class \(c)  current \(name(snap.current))  pending \(name(snap.pending))")
             lines.append("guards typing \(snap.typingGuard ? "ON" : "off")  mouse \(snap.mouseGuard ? "ON" : "off")  \(snap.paused ? "PAUSED" : "")")
             if let b = snap.blockedBy { lines.append("blocked by \(b)") }
+            if snap.gaze != nil {
+                lines.append("region \(snap.focusedRegion ?? "—")  pending \(snap.pendingRegion ?? "—")")
+            } else if defaults.bool(forKey: Pref.focusWithinScreen), let cur = snap.current, store.model(cur)?.gaze == nil {
+                lines.append("window focus needs a recalibration")
+            }
         }
         if case .running(_, let name) = cameraState { lines.append("camera \(name)") }
         return lines.joined(separator: "\n")
@@ -380,7 +420,8 @@ import GlanzowKit
 
     private func didSwitch(_ r: SwitchRecord) {
         let t = now()
-        var fields: [String: Any] = ["to": r.to, "from": r.from ?? "", "settleToFocusMs": Int((t - r.pendingSince) * 1000),
+        layoutPoke?.yield(())
+        var fields: [String: Any] = ["to": r.to, "from": r.from ?? "", "region": r.region ?? "", "settleToFocusMs": Int((t - r.pendingSince) * 1000),
                                      "frameToFocusMs": Int((t - r.time) * 1000), "focusMs": Int(r.focusDuration * 1000)]
         switch r.outcome {
         case .focusedWindow: fields["outcome"] = "window"
@@ -501,6 +542,12 @@ import GlanzowKit
         if displays.contains(where: \.ambiguous) {
             notifier.once("ambiguous", title: "Identical monitors detected", body: Self.ambiguousNote)
         }
+        // FR-P2-01: calibrations from before window focus have no gaze map.
+        if uncalibrated.isEmpty, defaults.bool(forKey: Pref.focusWithinScreen),
+           store.valid(for: displays, cameraID: cameraID).contains(where: { $0.gaze == nil }) {
+            notifier.once("needsGaze", title: "Recalibrate to focus windows",
+                          body: "Glanzow can now focus the window or pane you look at within a screen. Recalibrate once from the menu to turn it on.")
+        }
         let fresh = uncalibrated.filter { !promptedFor.contains($0.key) }
         guard !fresh.isEmpty, !calibrating, defaults.bool(forKey: Pref.onboardingDone) else { return }
         promptedFor.formUnion(fresh.map(\.key))
@@ -602,9 +649,11 @@ import GlanzowKit
         guard !calibrating else { return nil }
         guard cameraAuthorized else { return "Camera access is needed first." }
         calibrating = true
+        applySettings() // pupils on every frame: the gaze map needs them (FR-P2-01)
         reconcile() // starts the camera, pauses switching
         defer {
             calibrating = false
+            applySettings()
             rebuildModels()
             reconcile()
         }
@@ -629,7 +678,10 @@ import GlanzowKit
             let failing = outcome.failed + calibrated.filter { (accuracy[$0.key] ?? 0) < 0.9 }
             let pairs = calibrated.compactMap { d in store.model(d.key).map { (display: d, model: $0) } }
             let orderOK = CalibrationStore.yawOrderConsistent(pairs)
-            let summary = calibrated.map { "\($0.name) \(Int(((accuracy[$0.key] ?? 0) * 100).rounded()))%" }.joined(separator: ", ")
+            var summary = calibrated.map { "\($0.name) \(Int(((accuracy[$0.key] ?? 0) * 100).rounded()))%" }.joined(separator: ", ")
+            // FR-P2-01: how closely the gaze map hits the dots, as a share of the screen.
+            let aims = calibrated.compactMap { store.model($0.key)?.gaze.map { $0.eyesError ?? $0.headError } }
+            if let worst = aims.max() { summary += ". Window aim within about \(max(1, Int((worst * 100).rounded())))% of the screen" }
             log.info("validation \(summary, privacy: .public) order=\(orderOK)")
             if failing.isEmpty && orderOK { return "Calibrated. Validation: \(summary)." }
 

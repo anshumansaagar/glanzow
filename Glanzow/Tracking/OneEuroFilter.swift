@@ -41,23 +41,34 @@ public struct OneEuroFilter: Sendable {
 /// see identical numbers. A gap longer than `resetGap` (the face was lost) restarts the filters,
 /// so a returning face is not blended with where it was seconds ago.
 public struct PoseSmoother: Sendable {
-    private var yaw, pitch, roll, scale: OneEuroFilter
+    private var yaw, pitch, roll, scale, pupilX, pupilY: OneEuroFilter
     private var lastTime = -Double.infinity
     public var resetGap: TimeInterval = 1.0
 
     public init(_ p: SmoothingParams = SmoothingParams()) {
         let f = OneEuroFilter(minCutoff: p.minCutoff, beta: p.beta, dCutoff: p.dCutoff)
-        (yaw, pitch, roll, scale) = (f, f, f, f)
+        (yaw, pitch, roll, scale, pupilX, pupilY) = (f, f, f, f, f, f)
     }
 
     public mutating func callAsFunction(_ s: PoseSample) -> PoseSample {
-        if s.timestamp - lastTime > resetGap { yaw.reset(); pitch.reset(); roll.reset(); scale.reset() }
+        if s.timestamp - lastTime > resetGap { resetAll() }
         lastTime = s.timestamp
         var out = s
         out.yaw = yaw(s.yaw, at: s.timestamp)
         out.pitch = pitch(s.pitch, at: s.timestamp)
         out.roll = roll(s.roll, at: s.timestamp)
         out.faceScale = scale(s.faceScale, at: s.timestamp)
+        if let p = s.pupilOffset {
+            // Pupils are the noisiest channel; the same filter, applied to the offset.
+            out.pupilOffset = SIMD2(pupilX(p.x, at: s.timestamp), pupilY(p.y, at: s.timestamp))
+        } else {
+            pupilX.reset()
+            pupilY.reset()
+        }
         return out
+    }
+
+    private mutating func resetAll() {
+        yaw.reset(); pitch.reset(); roll.reset(); scale.reset(); pupilX.reset(); pupilY.reset()
     }
 }

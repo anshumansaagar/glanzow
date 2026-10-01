@@ -12,16 +12,24 @@ public enum FocusOutcome: Sendable, Equatable {
 
 public protocol FocusPerformer: Sendable {
     func focus(display: DisplayKey) async -> FocusOutcome
+    /// FR-P2-01, 02: a window or pane on the current display.
+    func focus(region: Region) async -> FocusOutcome
 }
 
 public struct FocusOptions: Sendable {
     public var movePointer = true
     public var excludedApps: Set<String> = []
+    public var paneClick = false
 
     public init(_ d: UserDefaults) {
         movePointer = d.bool(forKey: Pref.movePointer)
         excludedApps = Set(d.stringArray(forKey: Pref.excludedApps) ?? [])
+        paneClick = d.bool(forKey: Pref.paneClickFallback)
     }
+}
+
+extension Array {
+    subscript(safe i: Int) -> Element? { indices.contains(i) ? self[i] : nil }
 }
 
 /// Raises and activates the right window on a display, and warps the pointer (FR-FOC-01…08).
@@ -86,20 +94,7 @@ public struct FocusOptions: Sendable {
             }
         }
         guard let (info, element, app) = found else { return .skipped("no window reachable through Accessibility") }
-        AXUIElementSetMessagingTimeout(element, axTimeout)
-
-        // FR-FOC-04: raise and activate. Never a synthetic click in V1.
-        AXUIElementSetAttributeValue(element, kAXMainAttribute as CFString, kCFBooleanTrue)
-        AXUIElementSetAttributeValue(app, kAXFrontmostAttribute as CFString, kCFBooleanTrue)
-        switch AXUIElementPerformAction(element, kAXRaiseAction as CFString) {
-        case .success, .actionUnsupported: break
-        case .apiDisabled: onAXDisabled?(); return .skipped("Accessibility revoked")
-        case .cannotComplete: return skip("app not responding", info)
-        case let e: return skip("raise failed (\(e.rawValue))", info)
-        }
-        if let running = NSRunningApplication(processIdentifier: info.pid) {
-            DispatchQueue.main.async { _ = running.activate(options: []) }
-        }
+        if let failure = raise(info, element, app) { return failure }
         windows.remember(WindowRef(pid: info.pid, id: info.id, element: element, frame: info.bounds), on: key)
 
         // FR-FOC-06, 07: pointer to where it last was on this display if that is inside the
@@ -111,6 +106,147 @@ public struct FocusOptions: Sendable {
         }
         onFocused?(info.bounds)
         return .focusedWindow
+    }
+
+    /// FR-FOC-04: raise and activate. Nil on success. Never a synthetic click for windows.
+    private func raise(_ info: WindowInfo, _ element: AXUIElement, _ app: AXUIElement) -> FocusOutcome? {
+        AXUIElementSetMessagingTimeout(element, axTimeout)
+        AXUIElementSetAttributeValue(element, kAXMainAttribute as CFString, kCFBooleanTrue)
+        AXUIElementSetAttributeValue(app, kAXFrontmostAttribute as CFString, kCFBooleanTrue)
+        switch AXUIElementPerformAction(element, kAXRaiseAction as CFString) {
+        case .success, .actionUnsupported: break
+        case .apiDisabled: onAXDisabled?(); return .skipped("Accessibility revoked")
+        case .cannotComplete: return skip("app not responding", info)
+        case let e: return skip("raise failed (\(e.rawValue))", info)
+        }
+        if let running = NSRunningApplication(processIdentifier: info.pid) {
+            DispatchQueue.main.async { _ = running.activate(options: []) }
+        }
+        return nil
+    }
+
+    // MARK: Within a screen (Phase 2)
+
+    /// FR-P2-02: apps whose split panes get focus individually. Everything else — browsers,
+    /// chat, documents — switches whole windows only (FR-P2-03), so page regions never steal focus.
+    static let paneApps: Set<String> = [
+        "com.googlecode.iterm2", "com.apple.Terminal", "com.mitchellh.ghostty", "net.kovidgoyal.kitty",
+        "com.github.wez.wezterm", "dev.warp.Warp-Stable", "com.microsoft.VSCode", "com.microsoft.VSCodeInsiders",
+        "com.todesktop.230313mzl4w4u92", "com.vscodium", "dev.zed.Zed", "com.apple.dt.Xcode", "com.sublimetext.4",
+    ]
+
+    static func hasPanes(_ pid: pid_t) -> Bool {
+        guard let b = NSRunningApplication(processIdentifier: pid)?.bundleIdentifier else { return false }
+        return paneApps.contains(b) || b.hasPrefix("com.jetbrains.")
+    }
+
+    private var paneCache: [CGWindowID: (bounds: CGRect, at: TimeInterval, panes: [(frame: CGRect, element: AXUIElement)])] = [:]
+
+    /// The windows on display `key`, front to back, with the split panes of terminal and editor
+    /// windows, and which of them has focus now.
+    public func layout(for key: DisplayKey, panes includePanes: Bool) -> ScreenLayout? {
+        guard let d = displays.display(key) else { return nil }
+        let wins = onScreenWindows().filter { isNormalWindow($0, on: d) }.prefix(8)
+        let front = NSWorkspace.shared.frontmostApplication?.processIdentifier
+        let focusedWindow = windows.focused.flatMap { $0.pid == front ? $0.id : nil }
+        var regions: [Region] = []
+        var focused: String?
+        for w in wins {
+            let id = "w\(w.id)"
+            if includePanes, Self.hasPanes(w.pid) {
+                let panes = self.panes(of: w)
+                if panes.count >= 2 {
+                    for (i, p) in panes.enumerated() {
+                        regions.append(Region(id: "\(id)p\(i)", windowID: w.id, pid: w.pid, frame: p.frame.intersection(d.bounds), isPane: true))
+                    }
+                    if w.id == focusedWindow, let f = AXUIElement.application(w.pid).element(kAXFocusedUIElementAttribute)?.frame,
+                       let i = panes.firstIndex(where: { $0.frame.contains(CGPoint(x: f.midX, y: f.midY)) }) {
+                        focused = "\(id)p\(i)"
+                    }
+                }
+            }
+            regions.append(Region(id: id, windowID: w.id, pid: w.pid, frame: w.bounds.intersection(d.bounds), isPane: false))
+            if w.id == focusedWindow, focused == nil { focused = id }
+        }
+        paneCache = paneCache.filter { now() - $0.value.at < 30 }
+        return ScreenLayout(display: key, bounds: d.bounds, regions: regions, focused: focused)
+    }
+
+    /// Text areas covering at least 8% of the window: one per terminal session or editor split.
+    /// Cached for 5 s per window, or until it moves or resizes, since each read is IPC.
+    private func panes(of w: WindowInfo) -> [(frame: CGRect, element: AXUIElement)] {
+        if let c = paneCache[w.id], c.bounds == w.bounds, now() - c.at < 5 { return c.panes }
+        let app = AXUIElement.application(w.pid)
+        guard let window = (app.raw(kAXWindowsAttribute).value as? [AXUIElement])?.first(where: { $0.windowID == w.id }) else { return [] }
+        let minArea = w.bounds.width * w.bounds.height * 0.08
+        var found: [(frame: CGRect, element: AXUIElement)] = []
+        var queue: [(element: AXUIElement, depth: Int)] = [(window, 0)]
+        var next = 0
+        // ponytail: breadth-first, at most 250 elements and 8 levels deep; Electron editors have
+        // huge trees. Per-app known paths would be faster if an app needs it.
+        while next < queue.count, next < 250 {
+            let (el, depth) = queue[next]
+            next += 1
+            if el.string(kAXRoleAttribute) == kAXTextAreaRole, let f = el.frame, f.width * f.height >= minArea {
+                found.append((f, el))
+                continue
+            }
+            if depth < 8 { queue += el.elements(kAXChildrenAttribute).map { ($0, depth + 1) } }
+        }
+        // Reading order, so a pane keeps its index (and region id) between refreshes.
+        found.sort { ($0.frame.minY.rounded(), $0.frame.minX) < ($1.frame.minY.rounded(), $1.frame.minX) }
+        paneCache[w.id] = (w.bounds, now(), found)
+        return found
+    }
+
+    /// FR-P2-01, 02: raise the region's window if it isn't focused, then focus the pane through
+    /// AX. If the app ignores that, an opt-in click at the pane's centre does it (FR-P2-02).
+    public func focus(region r: Region) -> FocusOutcome {
+        let options = FocusOptions(.standard)
+        if let bundle = NSRunningApplication(processIdentifier: r.pid)?.bundleIdentifier, options.excludedApps.contains(bundle) {
+            return .skipped("excluded app")
+        }
+        let app = AXUIElement.application(r.pid)
+        let info = WindowInfo(id: r.windowID, pid: r.pid, layer: 0, bounds: r.frame, alpha: 1, owner: "")
+        let front = NSWorkspace.shared.frontmostApplication?.processIdentifier
+        if windows.focused?.id != r.windowID || front != r.pid {
+            let (list, error) = app.raw(kAXWindowsAttribute)
+            if error == .apiDisabled { onAXDisabled?(); return .skipped("Accessibility revoked") }
+            if error == .cannotComplete { return skip("app not responding", info) }
+            guard let element = (list as? [AXUIElement])?.first(where: { $0.windowID == r.windowID }) else {
+                return .skipped("window not reachable through Accessibility")
+            }
+            if let failure = raise(info, element, app) { return failure }
+            if let key = displays.display(containing: r.frame)?.key {
+                windows.remember(WindowRef(pid: r.pid, id: r.windowID, element: element, frame: element.frame ?? r.frame), on: key)
+            }
+        }
+        let centre = CGPoint(x: r.frame.midX, y: r.frame.midY)
+        if r.isPane, let index = Int(r.id.split(separator: "p").last ?? ""), let pane = paneCache[r.windowID]?.panes[safe: index] {
+            AXUIElementSetAttributeValue(pane.element, kAXFocusedAttribute as CFString, kCFBooleanTrue)
+            usleep(40_000) // let the app move its focus before checking
+            let now = app.element(kAXFocusedUIElementAttribute)?.frame
+            if !(now.map { r.frame.contains(CGPoint(x: $0.midX, y: $0.midY)) } ?? false) {
+                guard options.paneClick else { return skip("app ignored pane focus (click fallback is off)", info) }
+                click(at: centre)
+            }
+        }
+        if options.movePointer {
+            let last = displays.display(containing: r.frame).flatMap { input.lastPointer(on: $0.key) }.flatMap { r.frame.contains($0) ? $0 : nil }
+            warp(to: last ?? centre)
+        }
+        onFocused?(r.frame)
+        return .focusedWindow
+    }
+
+    /// The FR-P2-02 opt-in fallback: one left click. Our own events are ignored by the input
+    /// monitor (FR-SAF-03), so it doesn't trip the mouse guard.
+    private func click(at p: CGPoint) {
+        input.noteWarp(to: p)
+        let source = CGEventSource(stateID: .hidSystemState)
+        for type in [CGEventType.leftMouseDown, .leftMouseUp] {
+            CGEvent(mouseEventSource: source, mouseType: type, mouseCursorPosition: p, mouseButton: .left)?.post(tap: .cghidEventTap)
+        }
     }
 
     private func skip(_ reason: String, _ w: WindowInfo) -> FocusOutcome {

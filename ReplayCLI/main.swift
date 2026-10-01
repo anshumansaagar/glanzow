@@ -64,6 +64,7 @@ final class ReplayInput: InputMonitor, @unchecked Sendable {
 
 actor LoggingFocus: FocusPerformer {
     func focus(display: DisplayKey) -> FocusOutcome { .focusedWindow }
+    func focus(region: Region) -> FocusOutcome { .focusedWindow } // recordings carry no window layouts
 }
 
 final class Records: @unchecked Sendable { var list: [SwitchRecord] = [] }

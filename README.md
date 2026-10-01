@@ -141,8 +141,14 @@ camera frames ──▶ PoseTracker ──▶ smoothed head pose ──▶ Switc
    a menu, dialog, password field, screenshot tool or Mission Control open, or an excluded app is
    in front.
 4. **Focus** goes to the window you last used on that display, else its frontmost window. The
-   pointer follows, and a thin border flashes around the window.
-5. **Learning**: each click nudges that display's calibration a little. If the clicks keep
+   pointer follows, and a gold border flashes around the window.
+5. **Within a screen** (Phase 2), calibration also fits a map from head angle plus eye position
+   to a point on each screen. Look at another window, or another split pane in a terminal or
+   editor, for 450 ms and focus moves there. It never moves while you type, and it waits until
+   your gaze is clearly inside the new window rather than near a border. Browsers, chat and
+   documents switch whole windows only. Panes are focused through Accessibility; for apps that
+   ignore that, an opt-in setting clicks the pane's centre instead.
+6. **Learning**: each click nudges that display's calibration a little. If the clicks keep
    disagreeing with what Glanzow thought, it suggests recalibrating.
 
 ### Project layout
@@ -165,7 +171,15 @@ use exactly the code the app runs.
 
 ## Known limits
 
-- Window and split-pane focus within one screen (Phase 2) is not built.
+- Window and pane focus within a screen needs a calibration made with this version, and works
+  best for side-by-side windows and panes. Stacked panes depend on eye position, which a webcam
+  measures roughly; narrow panes (three or more across) will misfire. The calibration result
+  reports the "window aim" error as a share of the screen.
+- Pane detection looks for large text areas in the app's Accessibility tree. It is written for
+  iTerm2, Terminal, VS Code, Xcode and similar apps, but no app's tree could be inspected while
+  building it; check the debug overlay's "region" line in each app you use.
+- Eye tracking runs on every other frame, about 2.9 ms of CPU per frame on an M3 Pro (≈4.3% of a
+  core at 15 fps). Turning off *Focus the window I'm looking at* turns it off.
 - The last window is remembered per display, not per Space; a window on a hidden Space falls
   back to the frontmost visible one.
 - Mission Control is detected from the Dock's own open/close notifications. If Glanzow ever

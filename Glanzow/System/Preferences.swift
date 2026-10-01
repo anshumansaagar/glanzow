@@ -34,6 +34,9 @@ public enum Pref {
     public static let confirmMode = "confirmMode"
     public static let confirmKey = "confirmKey"   // fn, control, option, command
     public static let onboardingDone = "onboardingDone"
+    public static let focusWithinScreen = "focusWithinScreen"   // FR-P2-01
+    public static let focusPanes = "focusPanes"                 // FR-P2-02
+    public static let paneClickFallback = "paneClickFallback"   // FR-P2-02 opt-in click
     public static let suggestedCallApps = "suggestedCallApps"
     // Hidden debug pane
     public static let minCutoff = "minCutoff"
@@ -61,6 +64,9 @@ public enum Pref {
         confirmMode: false,
         confirmKey: "fn",
         onboardingDone: false,
+        focusWithinScreen: true,
+        focusPanes: true,
+        paneClickFallback: false,
         suggestedCallApps: [String](),
         minCutoff: 1.0,
         beta: 0.05,
@@ -88,6 +94,13 @@ public struct Tuning: Sendable, Equatable {
     public var mouseQuiet: TimeInterval = 1.5           // FR-SAF-02
     public var noFaceTimeout: TimeInterval = 1.0        // FR-TRK-06
     public var confirmMode = false                      // FR-SAF-08
+    public var focusWithinScreen = true                 // FR-P2-01
+    /// SPEC: Phase 2 gives no dwell for moves within a screen. Eye-based gaze is noisier than
+    /// head pose, so it waits 1.5× the screen dwell (450 ms by default).
+    public var regionDwell: TimeInterval = 0.45
+    /// Hysteresis within a screen: the gaze must leave the focused region by this fraction of
+    /// the display width, and land this far (halved) inside the new one.
+    public var regionMargin = 0.05
 
     public init() {}
 
@@ -98,6 +111,8 @@ public struct Tuning: Sendable, Equatable {
         typingPause = d.bool(forKey: Pref.waitWhileTyping) ? clamp(d.double(forKey: Pref.typingPause), 0.5, 10) : nil
         mouseQuiet = clamp(d.double(forKey: Pref.mouseQuiet), 0.5, 5)
         confirmMode = d.bool(forKey: Pref.confirmMode)
+        focusWithinScreen = d.bool(forKey: Pref.focusWithinScreen)
+        regionDwell = dwell * 1.5
     }
 
     /// SPEC: FR-CLS-03 says "at least 1.2×", user-tunable. 0–100% maps linearly to 1.2–1.6, so

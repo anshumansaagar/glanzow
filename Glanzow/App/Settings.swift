@@ -57,6 +57,9 @@ struct GeneralSettings: View {
     @AppStorage(Pref.flashOnSwitch) private var flash = true
     @AppStorage(Pref.showActiveBorder) private var border = false
     @AppStorage(Pref.learnFromClicks) private var learn = true
+    @AppStorage(Pref.focusWithinScreen) private var withinScreen = true
+    @AppStorage(Pref.focusPanes) private var panes = true
+    @AppStorage(Pref.paneClickFallback) private var paneClick = false
 
     var body: some View {
         Form {
@@ -79,6 +82,18 @@ struct GeneralSettings: View {
                 Text("Switching")
             } footer: {
                 Text("Glanzow moves focus once you've faced a new screen for the delay. Head turn needed sets how clearly you must face it. While you type or use the mouse, it waits.")
+                    .frame(maxWidth: .infinity, alignment: .leading).multilineTextAlignment(.leading)
+            }
+            Section {
+                Toggle("Focus the window I'm looking at", isOn: $withinScreen)
+                Toggle("Focus split panes in terminals and editors", isOn: $panes)
+                    .disabled(!withinScreen)
+                Toggle("Click a pane when its app ignores Accessibility", isOn: $paneClick)
+                    .disabled(!withinScreen || !panes)
+            } header: {
+                Text("Within a screen")
+            } footer: {
+                Text("Uses where your eyes point, so it needs a calibration made with this version. Side-by-side windows and panes work best; stacked or narrow ones are harder to tell apart. Browsers and chat apps switch whole windows only. The click fallback may move the text cursor in editors.")
                     .frame(maxWidth: .infinity, alignment: .leading).multilineTextAlignment(.leading)
             }
             Section("Feedback") {
@@ -261,7 +276,8 @@ struct CalibrationSettings: View {
         guard let m = model.store.model(d.key) else { return "Not calibrated" }
         let date = m.calibratedAt.formatted(date: .abbreviated, time: .shortened)
         if !model.cameraID.isEmpty && m.cameraID != model.cameraID { return "Calibrated \(date) with a different camera" }
-        return "Calibrated \(date)"
+        guard let g = m.gaze else { return "Calibrated \(date). Recalibrate to focus windows within it" }
+        return "Calibrated \(date). Window aim within about \(max(1, Int(((g.eyesError ?? g.headError) * 100).rounded())))%"
     }
 }
 
