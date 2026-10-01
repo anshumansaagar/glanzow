@@ -9,16 +9,18 @@ import GlanzowKit
 /// calibration state into one menu bar status.
 @MainActor final class AppModel: ObservableObject {
     enum Status: Equatable {
-        case active, paused, noFace, needsPermission, needsCalibration, noCamera, calibrating
+        case active, paused, pausedBySystem, noFace, needsPermission, needsCalibration, noCamera, cameraBusy, calibrating
 
         var title: String {
             switch self {
             case .active: "Active — focus follows the screen you face"
             case .paused: "Paused"
+            case .pausedBySystem: "Paused while the screen is locked or asleep"
             case .noFace: "No face in view"
             case .needsPermission: "Needs permission"
             case .needsCalibration: "Needs calibration"
             case .noCamera: "No camera"
+            case .cameraBusy: "Camera unavailable — retrying"
             case .calibrating: "Calibrating"
             }
         }
@@ -26,11 +28,11 @@ import GlanzowKit
         var symbol: String {
             switch self {
             case .active: "eye"
-            case .paused: "pause.circle"
+            case .paused, .pausedBySystem: "pause.circle"
             case .noFace: "eye.slash"
             case .needsPermission: "exclamationmark.triangle"
             case .needsCalibration, .calibrating: "scope"
-            case .noCamera: "video.slash"
+            case .noCamera, .cameraBusy: "video.slash"
             }
         }
     }
@@ -62,6 +64,11 @@ import GlanzowKit
         classifier: classifier, tuning: Tuning(defaults), focus: focusManager, input: input,
         systemBlock: { [focusManager] in await focusManager.blockingReason() })
     private let feedback = FocusFeedback()
+    private let notifier = Notifier()
+    private var hotkey: Hotkey?
+    private var hotkeySetting: (code: Int, modifiers: Int)?
+    /// FR-SAF-04: lock, sleep, screensaver, fast user switching. Any reason stops the camera.
+    private var systemPauses: Set<String> = [] { didSet { reconcile() } }
     private let eventLog = EventLog()
     private let recorder = PoseRecorder()
     private let log = logger("app")
@@ -109,6 +116,10 @@ import GlanzowKit
             for await e in decisions { await controller.handle(e) }
         })
         wireCallbacks()
+        observeSystem()
+        hotkey = Hotkey { [weak self] in self?.userPaused.toggle() }
+        notifier.onExclude = { [weak self] bundle in self?.exclude(bundle) }
+        if defaults.bool(forKey: Pref.onboardingDone) { notifier.requestPermission() }
         applySettings()
         refreshPermissions()
         if !defaults.bool(forKey: Pref.onboardingDone) { showOnboarding() }
@@ -159,7 +170,8 @@ import GlanzowKit
 
     /// Brings the camera and status in line with permissions, pauses and calibration.
     private func reconcile() {
-        let wantCamera = cameraAuthorized && !userPaused && (defaults.bool(forKey: Pref.onboardingDone) || calibrating)
+        let wantCamera = cameraAuthorized && !userPaused && systemPauses.isEmpty
+            && (defaults.bool(forKey: Pref.onboardingDone) || calibrating)
         if wantCamera != cameraWanted {
             cameraWanted = wantCamera
             if wantCamera { camera.start(preferredID: preferredCamera) } else { camera.stop() }
@@ -178,8 +190,10 @@ import GlanzowKit
     private func computeStatus() -> Status {
         if !cameraAuthorized || !permissionsGranted { return .needsPermission }
         if userPaused { return .paused }
+        if !systemPauses.isEmpty { return .pausedBySystem }
         if calibrating { return .calibrating }
-        if cameraState == .noCamera || cameraState == .busy { return .noCamera }
+        if cameraState == .noCamera { return .noCamera }
+        if cameraState == .busy { return .cameraBusy }
         if !uncalibrated.isEmpty { return .needsCalibration }
         if !faceVisible { return .noFace }
         return .active
@@ -189,6 +203,18 @@ import GlanzowKit
         log.info("camera state \(String(describing: s), privacy: .public)")
         cameraState = s
         if case .running = s {} else { setFaceVisible(false) }
+        switch s { // §7: tell the user once per episode
+        case .noCamera:
+            notifier.once("noCamera", title: "Glanzow has no camera",
+                          body: "The built-in camera is off (lid closed?) and no other camera is connected. Glanzow resumes when a camera appears.")
+        case .busy:
+            notifier.once("cameraBusy", title: "Camera unavailable",
+                          body: "Another app may be using the camera. Glanzow is paused and retries every 10 seconds.")
+        case .running:
+            notifier.forget("noCamera")
+            notifier.forget("cameraBusy")
+        case .stopped: break
+        }
         rebuildModels()
         reconcile()
         promptIfUncalibrated()
@@ -203,6 +229,13 @@ import GlanzowKit
             rebuildModels()
         }
         if !defaults.bool(forKey: Pref.showActiveBorder) { feedback.showActive(nil) }
+        let key = (defaults.integer(forKey: Pref.hotkeyCode), defaults.integer(forKey: Pref.hotkeyModifiers))
+        if hotkeySetting.map({ $0 != key }) ?? true {
+            hotkeySetting = key
+            if hotkey?.register(keyCode: UInt32(key.0), modifiers: UInt32(key.1)) == false {
+                log.error("pause shortcut is taken by another app")
+            }
+        }
         let preferred = defaults.string(forKey: Pref.cameraID).flatMap { $0.isEmpty ? nil : $0 }
         if preferred != preferredCamera {
             preferredCamera = preferred
@@ -346,6 +379,63 @@ import GlanzowKit
         recorder.record(.click, at: click.time, display: key)
     }
 
+    /// FR-SAF-04: stop the camera while the Mac is locked, asleep, in the screensaver, or
+    /// switched to another user; resume when all of those end.
+    private func observeSystem() {
+        let ws = NSWorkspace.shared.notificationCenter
+        let workspace: [(Notification.Name, String, Bool)] = [
+            (NSWorkspace.willSleepNotification, "sleep", true), (NSWorkspace.didWakeNotification, "sleep", false),
+            (NSWorkspace.screensDidSleepNotification, "display sleep", true), (NSWorkspace.screensDidWakeNotification, "display sleep", false),
+            (NSWorkspace.sessionDidResignActiveNotification, "user switch", true), (NSWorkspace.sessionDidBecomeActiveNotification, "user switch", false),
+        ]
+        for (name, reason, on) in workspace {
+            observers.append(ws.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.setSystemPause(reason, on) }
+            })
+        }
+        let distributed: [(String, String, Bool)] = [
+            ("com.apple.screenIsLocked", "lock", true), ("com.apple.screenIsUnlocked", "lock", false),
+            ("com.apple.screensaver.didstart", "screensaver", true), ("com.apple.screensaver.didstop", "screensaver", false),
+        ]
+        for (name, reason, on) in distributed {
+            observers.append(DistributedNotificationCenter.default().addObserver(forName: .init(name), object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.setSystemPause(reason, on) }
+            })
+        }
+        // §7 video calls: suggest excluding a call app the first time it comes to the front.
+        observers.append(ws.addObserver(forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { [weak self] note in
+            let bundle = (note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication)?.bundleIdentifier
+            MainActor.assumeIsolated { if let bundle { self?.suggestExclusion(bundle) } }
+        })
+    }
+
+    private func setSystemPause(_ reason: String, _ on: Bool) {
+        log.info("system pause \(reason, privacy: .public) \(on)")
+        if on { systemPauses.insert(reason) } else { systemPauses.remove(reason) }
+    }
+
+    static let callApps: Set<String> = ["us.zoom.xos", "com.microsoft.teams", "com.microsoft.teams2", "com.apple.FaceTime",
+                                        "com.cisco.webexmeetingsapp", "com.webex.meetingmanager", "com.skype.skype"]
+
+    private func suggestExclusion(_ bundle: String) {
+        guard Self.callApps.contains(bundle) else { return }
+        let excluded = defaults.stringArray(forKey: Pref.excludedApps) ?? []
+        var suggested = defaults.stringArray(forKey: Pref.suggestedCallApps) ?? []
+        guard !excluded.contains(bundle), !suggested.contains(bundle) else { return }
+        suggested.append(bundle)
+        defaults.set(suggested, forKey: Pref.suggestedCallApps)
+        let name = NSRunningApplication.runningApplications(withBundleIdentifier: bundle).first?.localizedName ?? bundle
+        notifier.once("call-\(bundle)", title: "Exclude \(name) from Glanzow?",
+                      body: "During calls you may look at other screens without wanting focus to move. Excluded apps never lose or gain focus to Glanzow.",
+                      category: "callApp", userInfo: ["bundleID": bundle])
+    }
+
+    private func exclude(_ bundle: String) {
+        var list = defaults.stringArray(forKey: Pref.excludedApps) ?? []
+        if !list.contains(bundle) { list.append(bundle) }
+        defaults.set(list, forKey: Pref.excludedApps)
+    }
+
     /// §7: Accessibility revoked — show "Needs permission" and wait for it to come back.
     private func accessibilityLost() {
         guard axTrusted else { return }
@@ -354,6 +444,9 @@ import GlanzowKit
     }
 
     private func promptIfUncalibrated() {
+        if displays.contains(where: \.ambiguous) {
+            notifier.once("ambiguous", title: "Identical monitors detected", body: Self.ambiguousNote)
+        }
         let fresh = uncalibrated.filter { !promptedFor.contains($0.key) }
         guard !fresh.isEmpty, !calibrating, defaults.bool(forKey: Pref.onboardingDone) else { return }
         promptedFor.formUnion(fresh.map(\.key))
@@ -440,6 +533,7 @@ import GlanzowKit
     func finishOnboarding(launchAtLogin: Bool) {
         defaults.set(true, forKey: Pref.onboardingDone)
         self.launchAtLogin = launchAtLogin
+        notifier.requestPermission()
         onboardingWindow?.close()
         reconcile()
     }

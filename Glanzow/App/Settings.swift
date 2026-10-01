@@ -76,6 +76,7 @@ struct GeneralSettings: View {
                 Toggle("Learn from clicks", isOn: $learn)
             }
             Section("System") {
+                HotkeyRecorder()
                 Toggle("Launch at login", isOn: Binding(get: { model.launchAtLogin }, set: { model.launchAtLogin = $0 }))
             }
         }
@@ -236,5 +237,41 @@ struct CalibrationSettings: View {
         let date = m.calibratedAt.formatted(date: .abbreviated, time: .shortened)
         if !model.cameraID.isEmpty && m.cameraID != model.cameraID { return "Calibrated \(date) with a different camera" }
         return "Calibrated \(date)"
+    }
+}
+
+/// FR-SAF-05: rebind the pause shortcut. Needs ⌘, ⌥ or ⌃ so it can't swallow normal typing.
+struct HotkeyRecorder: View {
+    @AppStorage(Pref.hotkeyLabel) private var label = "⇧⌘G"
+    @State private var recording = false
+    @State private var monitor: Any?
+
+    var body: some View {
+        LabeledContent("Pause shortcut") {
+            Button(recording ? "Type a shortcut…" : label) { recording ? stop() : start() }
+                .accessibilityLabel(recording ? "Recording. Press the new shortcut, or Escape to cancel." : "Pause shortcut \(label). Press to change.")
+        }
+        .onDisappear { stop() }
+    }
+
+    private func start() {
+        recording = true
+        monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { e in
+            if e.keyCode == 53 { stop(); return nil } // Escape
+            let mods = e.modifierFlags.intersection([.command, .option, .control, .shift])
+            guard !mods.isDisjoint(with: [.command, .option, .control]) else { NSSound.beep(); return nil }
+            let d = UserDefaults.standard
+            d.set(Int(e.keyCode), forKey: Pref.hotkeyCode)
+            d.set(Int(Hotkey.carbonModifiers(mods)), forKey: Pref.hotkeyModifiers)
+            label = Hotkey.label(keyCode: e.keyCode, characters: e.charactersIgnoringModifiers, flags: mods)
+            stop()
+            return nil
+        }
+    }
+
+    private func stop() {
+        recording = false
+        if let monitor { NSEvent.removeMonitor(monitor) }
+        monitor = nil
     }
 }

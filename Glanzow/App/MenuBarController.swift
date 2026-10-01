@@ -32,8 +32,8 @@ import GlanzowKit
         menu.addItem(state)
         menu.addItem(.separator())
 
-        let pause = add(menu, model.userPaused ? "Resume" : "Pause", #selector(togglePause))
-        pause.toolTip = "Shortcut: \(UserDefaults.standard.string(forKey: Pref.hotkeyLabel) ?? "")"
+        let shortcut = UserDefaults.standard.string(forKey: Pref.hotkeyLabel) ?? ""
+        add(menu, "\(model.userPaused ? "Resume" : "Pause")   \(shortcut)", #selector(togglePause))
 
         let recal = NSMenuItem(title: "Recalibrate", action: nil, keyEquivalent: "")
         let sub = NSMenu()
