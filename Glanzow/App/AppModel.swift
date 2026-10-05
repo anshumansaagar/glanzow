@@ -136,6 +136,11 @@ import GlanzowKit
     private var eyesNeeded = false
     private var perfTimer: Timer?
     private var learning = LearningEngine()
+    private var eyeBreak = EyeBreakTimer()
+    private let eyePill = EyeBreakPill()
+    private var privacy = PrivacyGuard()
+    private let veil = PrivacyVeil()
+    private var lastPointerJump = -Double.infinity
     private var clicksSinceRefit: [DisplayKey: Int] = [:]
     private var governor = FrameRateGovernor()
     private var saveScheduled = false
@@ -236,8 +241,20 @@ import GlanzowKit
         input.onConfirm = { t in Task { await controller.confirm(at: t) } }
         input.onActivity = { [weak self, recorder] kind, t in
             recorder.record(kind, at: t)
-            if self?.resting == true { self?.setSystemPause("away", false) } // a key or the mouse: someone's back
+            guard let self else { return }
+            if self.resting { self.setSystemPause("away", false) } // a key or the mouse: someone's back
+            if self.veil.isShown { // the user says it's fine
+                self.privacy.dismiss()
+                self.veil.hide()
+            }
         }
+        input.onMoveStart = { [weak self] p, t in self?.reachedForMouse(p, at: t) }
+        eyePill.onLater = { [weak self] in
+            self?.eyeBreak.snooze()
+            self?.eyePill.hide()
+        }
+        // A warp otherwise mutes the mouse for 0.25 s, which would make every jump feel sticky.
+        CGEventSource(stateID: .combinedSessionState)?.localEventsSuppressionInterval = 0
     }
 
     /// FR-P2: keeps the controller's picture of the current display's windows and panes fresh.
@@ -404,6 +421,7 @@ import GlanzowKit
 
     private func handlePose(_ e: PoseEvent) {
         learning.observe(e)
+        updateEyeFeatures(e)
         if let fps = governor.update(e) { // FR-TRK-08
             tracker.setFrameRate(fps)                                   // frames analysed
             camera.setFrameRate(fps == FrameRateGovernor.idle ? 5 : 15) // frames captured
@@ -531,8 +549,72 @@ import GlanzowKit
         log.info("switch → \(r.to, privacy: .public) settle-to-focus \(Int((t - r.pendingSince) * 1000)) ms")
     }
 
+    /// FR-UI-03, as the user's chosen feedback. The spotlight is clear for the first 50 switches,
+    /// then lighter: once you trust it, it should barely be noticed.
     private func focused(_ rect: CGRect) {
-        if defaults.bool(forKey: Pref.flashOnSwitch) { feedback.flash(rect) } // FR-UI-03
+        switch defaults.string(forKey: Pref.feedbackStyle) ?? "spotlight" {
+        case "none": break
+        case "ring": feedback.flash(rect)
+        default:
+            guard let d = registry.display(containing: rect) else { return feedback.flash(rect) }
+            let seasoned = defaults.integer(forKey: Pref.switchesTotal) > 50
+            feedback.spotlight(rect, on: d.bounds, strength: seasoned ? 0.14 : 0.24)
+        }
+    }
+
+    // MARK: Eye features
+
+    /// Eye breaks and the privacy guard, from the pose stream (main thread, cheap).
+    private func updateEyeFeatures(_ e: PoseEvent) {
+        let t = e.timestamp
+        var sample: PoseSample?
+        if case .pose(let s) = e { sample = s }
+        if defaults.bool(forKey: Pref.eyeBreaks) {
+            let onScreen = sample.map { classifier.classify($0, current: nil) != .offScreen } ?? false
+            switch eyeBreak.update(at: t, onScreen: onScreen) {
+            case .due?:
+                eventLog.append("eyeBreak", ["due": true])
+                eyePill.show(progress: 0)
+            case .done?:
+                eventLog.append("eyeBreak", ["done": true])
+                eyePill.finish()
+            case nil:
+                if case .due(let progress) = eyeBreak.state { eyePill.show(progress: progress) }
+            }
+        }
+        if defaults.bool(forKey: Pref.privacyGuard) {
+            if privacy.update(at: t, watchers: sample?.watchers ?? 0) {
+                if privacy.veiled {
+                    eventLog.append("privacyGuard", ["veiled": true])
+                    veil.show()
+                } else {
+                    veil.hide()
+                }
+            }
+        } else if veil.isShown {
+            veil.hide()
+        }
+    }
+
+    /// Pointer follows your eyes (MAGIC pointing): as the hand reaches for a resting mouse, the
+    /// pointer jumps near the gaze; the hand does the last bit. At most once every 1.5 s.
+    private func reachedForMouse(_ p: CGPoint, at t: TimeInterval) {
+        guard defaults.bool(forKey: Pref.magicPointer), switchingEnabled, faceVisible, t - lastPointerJump > 1.5 else { return }
+        Task {
+            let snap = await controller.snapshot()
+            var faced: DisplayKey?
+            if case .candidate(let k)? = snap.classification { faced = k }
+            if case .stay? = snap.classification { faced = snap.current }
+            guard let key = faced, let d = registry.display(key),
+                  let target = MagicPointer.target(pointer: p, gaze: key == snap.current ? snap.gaze : nil, faced: d,
+                                                   pointerDisplay: registry.display(at: p), lastOnFaced: input.lastPointer(on: key))
+            else { return }
+            lastPointerJump = t
+            input.noteWarp(to: target)
+            CGWarpMouseCursorPosition(target)
+            CGAssociateMouseAndMouseCursorPosition(1)
+            eventLog.append("pointer", ["display": key, "jumpPx": Int(hypot(target.x - p.x, target.y - p.y))])
+        }
     }
 
     private func focusChanged(_ key: DisplayKey?, _ frame: CGRect?) {
@@ -577,6 +659,7 @@ import GlanzowKit
             defaults.set(0, forKey: Pref.statsUndos)
         }
         defaults.set(defaults.integer(forKey: Pref.statsSwitches) + switches, forKey: Pref.statsSwitches)
+        if switches > 0 { defaults.set(defaults.integer(forKey: Pref.switchesTotal) + switches, forKey: Pref.switchesTotal) }
         defaults.set(defaults.integer(forKey: Pref.statsUndos) + undos, forKey: Pref.statsUndos)
         refreshToday()
     }

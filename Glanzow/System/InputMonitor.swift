@@ -46,6 +46,8 @@ public final class EventTapInputMonitor: InputMonitor, @unchecked Sendable {
     }
     /// Debug recorder hook: `.key` / `.mouse` activity timestamps.
     public var onActivity: ((RecordedEvent.Kind, TimeInterval) -> Void)?
+    /// The mouse started moving after resting for 0.6 s (pointer follows eyes).
+    public var onMoveStart: ((CGPoint, TimeInterval) -> Void)?
 
     public init(displays: DisplayRegistry = .shared) { self.displays = displays }
 
@@ -109,11 +111,15 @@ public final class EventTapInputMonitor: InputMonitor, @unchecked Sendable {
             guard !own else { return }
             PerfMeter.shared.mouseEvent()
             let key = displays.display(at: p)?.key
-            state.withLock { s in
-                s.mouse = t
-                if let key { s.pointer[key] = p }
+            let rested = state.withLock { s -> Bool in
+                defer {
+                    s.mouse = t
+                    if let key { s.pointer[key] = p }
+                }
+                return t - s.mouse >= 0.6
             }
             onActivity?(.mouse, t)
+            if rested, type == .mouseMoved { onMoveStart?(p, t) } // not while dragging
         case .leftMouseDown, .rightMouseDown:
             state.withLock { $0.mouse = t }
             onActivity?(.mouse, t)

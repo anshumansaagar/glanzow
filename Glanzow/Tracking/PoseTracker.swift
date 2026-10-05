@@ -14,11 +14,13 @@ public struct PoseSample: Codable, Sendable, Equatable {
     /// middle of the corner-to-corner line, averaged over open eyes (FR-TRK-03; IrisLocator).
     public var pupilOffset: SIMD2<Double>?
     public var confidence: Double
+    /// Other faces turned toward the screens, besides the user's (privacy guard).
+    public var watchers: Int?
 
     public init(timestamp: TimeInterval, yaw: Double, pitch: Double, roll: Double = 0, faceScale: Double = 0.2,
-                pupilOffset: SIMD2<Double>? = nil, confidence: Double = 1) {
+                pupilOffset: SIMD2<Double>? = nil, confidence: Double = 1, watchers: Int? = nil) {
         self.timestamp = timestamp; self.yaw = yaw; self.pitch = pitch; self.roll = roll
-        self.faceScale = faceScale; self.pupilOffset = pupilOffset; self.confidence = confidence
+        self.faceScale = faceScale; self.pupilOffset = pupilOffset; self.confidence = confidence; self.watchers = watchers
     }
 
     public var angles: SIMD2<Double> { SIMD2(yaw, pitch) }
@@ -158,11 +160,23 @@ public final class PoseTracker: NSObject, PoseSource, AVCaptureVideoDataOutputSa
         // An ignored sample counts as no face, so a long tilt reads as "No face" and nothing switches.
         guard abs(roll * deg) <= 30 else { return (.noFace(t), nil) }
         var sample = PoseSample(timestamp: t, yaw: yaw * deg, pitch: pitch * deg, roll: roll * deg,
-                                faceScale: Double(face.boundingBox.width), confidence: Double(face.confidence))
+                                faceScale: Double(face.boundingBox.width), confidence: Double(face.confidence),
+                                watchers: Self.watchers(besides: face, in: faceRequest.results ?? []))
         guard pupils else { return (.pose(sample), nil) }
         let start = PerfMeter.clock()
         sample.pupilOffset = pupilOffset(face, pixels)
         return (.pose(sample), PerfMeter.clock() - start)
+    }
+
+    /// Privacy guard: other confident faces, not tiny next to the user's, looking toward the
+    /// screens (the camera sits at them). Costs nothing extra: the detector found them anyway.
+    static func watchers(besides user: VNFaceObservation, in faces: [VNFaceObservation]) -> Int {
+        let area = user.boundingBox.width * user.boundingBox.height
+        let limit = 25 * Double.pi / 180
+        return faces.filter { f in
+            f !== user && f.confidence >= 0.7 && f.boundingBox.width * f.boundingBox.height >= area * 0.15
+                && abs(f.yaw?.doubleValue ?? 1) <= limit && abs(f.pitch?.doubleValue ?? 1) <= limit
+        }.count
     }
 
     /// §2, §7: with several faces, follow the largest, preferring the one nearest the last tracked face.

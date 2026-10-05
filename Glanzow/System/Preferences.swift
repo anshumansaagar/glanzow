@@ -53,6 +53,7 @@ public enum Pref {
     public static let statsDay = "statsDay"
     public static let statsSwitches = "statsSwitches"
     public static let statsUndos = "statsUndos"
+    public static let switchesTotal = "switchesTotal"
     public static let excludedApps = "excludedApps"
     public static let showActiveBorder = "showActiveBorder"
     public static let confirmMode = "confirmMode"

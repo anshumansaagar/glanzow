@@ -30,6 +30,61 @@ import GlanzowKit
     private let flashPanel = FocusFeedback.panel(level: .screenSaver, rings: flashRings)
     private let activePanel = FocusFeedback.panel(level: .floating, rings: activeRings)
     private var flashGeneration = 0
+    private var spotlightPanel: NSPanel?
+    private var spotlightGeneration = 0
+
+    /// "Spotlight": for a moment everything on the display except the newly focused window (or
+    /// pane) dims, so the eye lands on it whatever its colours — a white page included — and
+    /// nothing is drawn on the content itself. `strength` is the dimming at its peak.
+    func spotlight(_ rect: CGRect, on display: CGRect, strength: CGFloat) {
+        let panel = spotlightPanel ?? {
+            let p = DebugOverlay.clickThroughPanel()
+            p.level = .screenSaver
+            p.backgroundColor = .clear
+            let v = NSView()
+            v.wantsLayer = true
+            let shade = CAShapeLayer()
+            shade.fillRule = .evenOdd
+            v.layer?.addSublayer(shade)
+            for r in Self.activeRings { v.layer?.addSublayer(Self.layer(r)) }
+            p.contentView = v
+            spotlightPanel = p
+            return p
+        }()
+        let frame = cocoaRect(display)
+        panel.setFrame(frame, display: false)
+        let local = CGRect(x: rect.minX - display.minX, y: display.maxY - rect.maxY, width: rect.width, height: rect.height) // flip into the view
+            .intersection(CGRect(origin: .zero, size: frame.size))
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        if let layers = panel.contentView?.layer?.sublayers, let shade = layers.first as? CAShapeLayer {
+            shade.frame = CGRect(origin: .zero, size: frame.size)
+            let path = CGMutablePath()
+            path.addRect(shade.frame)
+            path.addPath(CGPath(roundedRect: local, cornerWidth: 11, cornerHeight: 11, transform: nil))
+            shade.path = path
+            shade.fillColor = NSColor.black.withAlphaComponent(strength).cgColor
+            Self.layout(Array(layers.dropFirst()), around: local)
+        }
+        CATransaction.commit()
+        spotlightGeneration += 1
+        let generation = spotlightGeneration
+        panel.alphaValue = 0
+        panel.orderFrontRegardless()
+        NSAnimationContext.runAnimationGroup { $0.duration = 0.08; panel.animator().alphaValue = 1 }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self, generation == self.spotlightGeneration else { return }
+                NSAnimationContext.runAnimationGroup { ctx in
+                    ctx.duration = 0.4
+                    ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
+                    panel.animator().alphaValue = 0
+                } completionHandler: {
+                    MainActor.assumeIsolated { if generation == self.spotlightGeneration { panel.orderOut(nil) } }
+                }
+            }
+        }
+    }
 
     func flash(_ rect: CGRect) {
         place(flashPanel, around: rect)
@@ -106,6 +161,40 @@ import GlanzowKit
     }
 
     #if DEBUG
+    /// The spotlight on a mock desktop: a white browser window focused beside a dark editor.
+    static func spotlightPreview(strength: CGFloat) -> NSView {
+        let size = CGSize(width: 960, height: 600)
+        let v = NSView(frame: CGRect(origin: .zero, size: size))
+        v.wantsLayer = true
+        let desk = CAGradientLayer()
+        desk.frame = v.bounds
+        desk.colors = [NSColor(srgbRed: 0.42, green: 0.47, blue: 0.58, alpha: 1).cgColor, NSColor(srgbRed: 0.62, green: 0.55, blue: 0.62, alpha: 1).cgColor]
+        v.layer?.addSublayer(desk)
+        let editor = CALayer(); editor.frame = CGRect(x: 30, y: 40, width: 430, height: 520)
+        editor.backgroundColor = NSColor(white: 0.13, alpha: 1).cgColor; editor.cornerRadius = 11
+        let page = CALayer(); page.frame = CGRect(x: 490, y: 40, width: 440, height: 520)
+        page.backgroundColor = NSColor.white.cgColor; page.cornerRadius = 11
+        for l in [editor, page] { v.layer?.addSublayer(l) }
+        for i in 0..<9 { // a few lines of "text" on each
+            let a = CALayer(); a.frame = CGRect(x: 60, y: 500 - CGFloat(i) * 34, width: CGFloat(200 + (i * 37) % 160), height: 8)
+            a.backgroundColor = NSColor(white: 0.45, alpha: 1).cgColor; a.cornerRadius = 4; v.layer?.addSublayer(a)
+            let b = CALayer(); b.frame = CGRect(x: 520, y: 500 - CGFloat(i) * 34, width: CGFloat(220 + (i * 53) % 150), height: 8)
+            b.backgroundColor = NSColor(white: 0.82, alpha: 1).cgColor; b.cornerRadius = 4; v.layer?.addSublayer(b)
+        }
+        let shade = CAShapeLayer()
+        shade.fillRule = .evenOdd
+        let path = CGMutablePath()
+        path.addRect(v.bounds)
+        path.addPath(CGPath(roundedRect: page.frame, cornerWidth: 11, cornerHeight: 11, transform: nil))
+        shade.path = path
+        shade.fillColor = NSColor.black.withAlphaComponent(strength).cgColor
+        v.layer?.addSublayer(shade)
+        let rings = activeRings.map(layer)
+        rings.forEach { v.layer?.addSublayer($0) }
+        layout(rings, around: page.frame)
+        return v
+    }
+
     /// The flash over a white and a dark window, for design snapshots.
     static func preview() -> NSView {
         let v = NSView(frame: CGRect(x: 0, y: 0, width: 900, height: 360))
