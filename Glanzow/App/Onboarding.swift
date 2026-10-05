@@ -54,7 +54,7 @@ struct OnboardingView: View {
                         }
                     }
                     StepRow(number: 3, title: "Teach it your screens",
-                            detail: calibrationNote ?? "A gleam glides around each screen. Follow it with your eyes, about 15 seconds a screen.",
+                            detail: calibrationNote ?? "A gleam glides around each screen, then jumps between a few spots. Follow it with your eyes, about 25 seconds a screen.",
                             done: screensDone, current: accessDone && !screensDone) {
                         if calibrating {
                             HStack(spacing: 6) { ProgressView().controlSize(.small); Text("Learning…").foregroundStyle(.secondary) }

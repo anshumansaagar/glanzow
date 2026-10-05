@@ -7,6 +7,15 @@ import QuartzCore
         public var models: [DisplayModel]
         /// Displays where the face was seen too rarely to fit a model.
         public var failed: [DisplayInfo]
+        public var spotChecks: [DisplayKey: SpotCheck] = [:]
+    }
+
+    /// How closely a gaze map finds the fixed spots, per axis, as a share of the screen: the map
+    /// from the tour alone against the one that also learned from the spots.
+    public struct SpotCheck: Sendable {
+        public var tourOnly: SIMD2<Double>
+        public var final: SIMD2<Double>
+        public var spots: Int
     }
 
     private let source: PoseSource
@@ -23,7 +32,8 @@ import QuartzCore
     /// glides once around the screen (every corner and shared edge, FR-CAL-01) and across the
     /// middle, at an easy pace for the eyes to follow. This is smooth-pursuit calibration
     /// (Pfeuffer et al., UIST 2013): every frame on the way is a training pair, many times more
-    /// data than resting on a few dots, in about 15 s a screen. Nil if the user pressed Escape.
+    /// data than resting on a few dots. Then nine fixed spots, looked at as things are in real use;
+    /// about 25 s a screen in all. Nil if the user pressed Escape.
     public func calibrate(_ targets: [DisplayInfo], among all: [DisplayInfo], cameraID: String) async -> Outcome? {
         open(all)
         var outcome = Outcome(models: [], failed: [])
@@ -62,13 +72,31 @@ import QuartzCore
             }
             view.clearTrail()
             let tourEnd = now()
+            // Then the gleam jumps between fixed spots. A target that jumps is looked at the way
+            // things are in real use, eyes first with the head following a little; one that glides
+            // invites tracking it with the head, which teaches the map little about the eyes.
+            view.setText(title: "", subtitle: "Now look at each spot as it appears")
+            var spots: [(shown: ClosedRange<TimeInterval>, target: SIMD2<Double>)] = []
+            for p in Self.fixedSpots(in: d) {
+                view.moveDot(to: view.local(p, in: d), animated: false)
+                view.hold(for: 0.9)
+                let shown = now()
+                guard await pause(0.9) else { return nil }
+                spots.append(((shown + 0.35)...(shown + 0.9), Self.normalised(p, in: d))) // once eyes and head have settled
+            }
+            view.release()
             let pairs = Self.pursuitPairs(samples, rest: (restStart + 0.3)...restEnd, centre: centre,
                                           tour: tourStart...tourEnd, path: path, speed: speed, in: d)
+            let fixed = Self.spotPairs(samples, spots)
             if var m = DisplayModel.fit(key: d.key, name: d.name, cameraID: cameraID, samples: pairs.map(\.sample)) {
-                m.gaze = GazeMap.fit(pairs) // FR-P2-01
-                let stride = max(1, pairs.count / DisplayModel.maxGazePairs) // keep an even spread
-                m.gazePairs = Swift.stride(from: 0, to: pairs.count, by: stride).prefix(DisplayModel.maxGazePairs).map { GazePair(pairs[$0].sample, target: pairs[$0].target) }
+                let all = fixed + pairs // spots first, so the cap below can never drop them
+                m.gaze = GazeMap.fit(all) // FR-P2-01
+                let stride = max(1, all.count / DisplayModel.maxGazePairs) // keep an even spread
+                m.gazePairs = Swift.stride(from: 0, to: all.count, by: stride).prefix(DisplayModel.maxGazePairs).map { GazePair(all[$0].sample, target: all[$0].target) }
                 outcome.models.append(m)
+                if let tour = GazeMap.fit(pairs), let final = m.gaze, !fixed.isEmpty {
+                    outcome.spotChecks[d.key] = SpotCheck(tourOnly: tour.rms(on: fixed), final: final.rms(on: fixed), spots: fixed.count)
+                }
             } else {
                 outcome.failed.append(d)
             }
@@ -82,18 +110,33 @@ import QuartzCore
     nonisolated static func pursuitPairs(_ samples: [PoseSample], rest: ClosedRange<TimeInterval>, centre: CGPoint,
                                          tour: ClosedRange<TimeInterval>, path: Polyline, speed: CGFloat,
                                          in d: DisplayInfo, lag: TimeInterval = 0.1) -> [(sample: PoseSample, target: SIMD2<Double>)] {
-        func normalised(_ p: CGPoint) -> SIMD2<Double> {
-            SIMD2(Double((p.x - d.bounds.minX) / d.bounds.width), Double((p.y - d.bounds.minY) / d.bounds.height))
-        }
         let cornerGap = 0.25 * Double(speed)
         return samples.compactMap { s in
-            if rest.contains(s.timestamp) { return (s, normalised(centre)) }
+            if rest.contains(s.timestamp) { return (s, normalised(centre, in: d)) }
             let t = s.timestamp - lag
             guard t >= tour.lowerBound + 0.4, t <= tour.upperBound else { return nil }
             let travelled = CGFloat(t - tour.lowerBound) * speed
             guard path.corners.allSatisfy({ abs(Double($0 - travelled)) > cornerGap }) else { return nil }
-            return (s, normalised(path.position(at: travelled)))
+            return (s, normalised(path.position(at: travelled), in: d))
         }
+    }
+
+    nonisolated static func normalised(_ p: CGPoint, in d: DisplayInfo) -> SIMD2<Double> {
+        SIMD2(Double((p.x - d.bounds.minX) / d.bounds.width), Double((p.y - d.bounds.minY) / d.bounds.height))
+    }
+
+    /// A 3×3 grid, in an order where every move is a long jump (two of them the full height), so
+    /// each spot is a fresh look rather than a small correction.
+    nonisolated static func fixedSpots(in d: DisplayInfo) -> [CGPoint] {
+        let order: [(x: CGFloat, y: CGFloat)] = [(0.1, 0.1), (0.9, 0.9), (0.9, 0.1), (0.1, 0.9), (0.5, 0.5),
+                                                 (0.1, 0.5), (0.9, 0.5), (0.5, 0.1), (0.5, 0.9)]
+        return order.map { CGPoint(x: d.bounds.minX + $0.x * d.bounds.width, y: d.bounds.minY + $0.y * d.bounds.height) }
+    }
+
+    /// Each sample taken while a spot was settled on, paired with that spot.
+    nonisolated static func spotPairs(_ samples: [PoseSample], _ spots: [(shown: ClosedRange<TimeInterval>, target: SIMD2<Double>)])
+        -> [(sample: PoseSample, target: SIMD2<Double>)] {
+        samples.compactMap { s in spots.first { $0.shown.contains(s.timestamp) }.map { (s, $0.target) } }
     }
 
     /// The tour: the FR-CAL-01 points in order (every corner, and two points on each shared edge),

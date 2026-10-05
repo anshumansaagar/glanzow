@@ -16,6 +16,9 @@ public struct PoseSample: Codable, Sendable, Equatable {
     public var confidence: Double
     /// Other faces turned toward the screens, besides the user's (privacy guard).
     public var watchers: Int?
+    /// Centre of the face box in the camera image (normalised, origin bottom-left): where the
+    /// head is, as opposed to where it points. Recorded to measure how much posture moves gaze.
+    public var faceCentre: SIMD2<Double>?
 
     public init(timestamp: TimeInterval, yaw: Double, pitch: Double, roll: Double = 0, faceScale: Double = 0.2,
                 pupilOffset: SIMD2<Double>? = nil, confidence: Double = 1, watchers: Int? = nil) {
@@ -162,6 +165,7 @@ public final class PoseTracker: NSObject, PoseSource, AVCaptureVideoDataOutputSa
         var sample = PoseSample(timestamp: t, yaw: yaw * deg, pitch: pitch * deg, roll: roll * deg,
                                 faceScale: Double(face.boundingBox.width), confidence: Double(face.confidence),
                                 watchers: Self.watchers(besides: face, in: faceRequest.results ?? []))
+        sample.faceCentre = SIMD2(Double(face.boundingBox.midX), Double(face.boundingBox.midY))
         guard pupils else { return (.pose(sample), nil) }
         let start = PerfMeter.clock()
         sample.pupilOffset = pupilOffset(face, pixels)

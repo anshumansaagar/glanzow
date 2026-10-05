@@ -9,14 +9,21 @@ public struct GazePair: Codable, Sendable, Equatable {
     public var eyeY: Double?
     public var x: Double
     public var y: Double
+    /// Where the head was (face centre in the image, and face size): not used by the fit yet,
+    /// kept so real use can show how much posture moves the gaze point.
+    public var faceX: Double?
+    public var faceY: Double?
+    public var faceScale: Double?
 
     public init(_ s: PoseSample, target: SIMD2<Double>) {
         yaw = s.yaw; pitch = s.pitch; eyeX = s.pupilOffset?.x; eyeY = s.pupilOffset?.y; x = target.x; y = target.y
+        faceX = s.faceCentre?.x; faceY = s.faceCentre?.y; faceScale = s.faceScale
     }
 
     var sample: PoseSample {
-        var s = PoseSample(timestamp: 0, yaw: yaw, pitch: pitch)
+        var s = PoseSample(timestamp: 0, yaw: yaw, pitch: pitch, faceScale: faceScale ?? 0.2)
         if let eyeX, let eyeY { s.pupilOffset = SIMD2(eyeX, eyeY) }
+        if let faceX, let faceY { s.faceCentre = SIMD2(faceX, faceY) }
         return s
     }
     var target: SIMD2<Double> { SIMD2(x, y) }
@@ -63,6 +70,12 @@ public struct GazeMap: Codable, Sendable, Equatable {
         let (rows, f) = usable.flatMap { e in Self.features(s, angles: a, eyes: true).map { (e, $0) } }
             ?? (head, Self.features(s, angles: a, eyes: false)!)
         return SIMD2(zip(rows[0], f).map(*).reduce(0, +), zip(rows[1], f).map(*).reduce(0, +))
+    }
+
+    /// Root-mean-square miss on each axis over `pairs`, as a share of the screen.
+    public func rms(on pairs: [(sample: PoseSample, target: SIMD2<Double>)]) -> SIMD2<Double> {
+        let sq = pairs.reduce(SIMD2<Double>.zero) { sum, p in let d = point(p.sample) - p.target; return sum + d * d }
+        return (sq / Double(max(pairs.count, 1))).squareRoot()
     }
 
     /// The error of the model `point` would use for this sample.

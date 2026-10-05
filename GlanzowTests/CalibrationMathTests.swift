@@ -133,6 +133,24 @@ final class PursuitTests: XCTestCase {
         XCTAssertTrue(path.contains(CGPoint(x: 60, y: 540)) && path.contains(CGPoint(x: 1860, y: 540)), "crosses the middle")
     }
 
+    func test_fixedSpotsStayOnScreenAndEveryMoveIsALongJump() {
+        let spots = CalibrationOverlay.fixedSpots(in: b)
+        XCTAssertEqual(Set(spots.map { "\($0.x),\($0.y)" }).count, 9, "nine different spots")
+        XCTAssertTrue(spots.allSatisfy { b.bounds.insetBy(dx: 100, dy: 100).contains($0) })
+        for (p, q) in zip(spots, spots.dropFirst()) {
+            XCTAssertGreaterThan(hypot((q.x - p.x) / 1920, (q.y - p.y) / 1080), 0.39, "\(p) → \(q) is a small correction, not a jump")
+        }
+        XCTAssertTrue(zip(spots, spots.dropFirst()).contains { $0.x == $1.x && abs($1.y - $0.y) >= 0.8 * 1080 }, "a full-height jump")
+    }
+
+    func test_spotPairsKeepOnlySamplesTakenOnceASpotHadSettled() {
+        let spots: [(shown: ClosedRange<TimeInterval>, target: SIMD2<Double>)] = [(1.35...1.9, SIMD2(0.1, 0.1)), (2.25...2.8, SIMD2(0.9, 0.9))]
+        let samples = [1.2, 1.4, 1.8, 2.0, 2.3, 2.9].map { PoseSample(timestamp: $0, yaw: 0, pitch: 0) }
+        let pairs = CalibrationOverlay.spotPairs(samples, spots)
+        XCTAssertEqual(pairs.map(\.sample.timestamp), [1.4, 1.8, 2.3])
+        XCTAssertEqual(pairs.map(\.target), [SIMD2(0.1, 0.1), SIMD2(0.1, 0.1), SIMD2(0.9, 0.9)])
+    }
+
     func test_polylineWalksByDistanceAndFindsCorners() {
         let line = Polyline([CGPoint(x: 0, y: 0), CGPoint(x: 100, y: 0), CGPoint(x: 100, y: 50)])
         XCTAssertEqual(line.length, 150)

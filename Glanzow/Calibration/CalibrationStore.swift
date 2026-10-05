@@ -92,6 +92,7 @@ public final class CalibrationStore: @unchecked Sendable {
             guard let list else { return true }
             return list.count <= cap && list.allSatisfy {
                 ok($0.yaw, 180) && ok($0.pitch, 180) && ok($0.x, 10) && ok($0.y, 10) && ok($0.eyeX ?? 0, 10) && ok($0.eyeY ?? 0, 10)
+                    && ok($0.faceX ?? 0, 10) && ok($0.faceY ?? 0, 10) && ok($0.faceScale ?? 0, 10)
             }
         }
         if !pairsOK(model.gazePairs, DisplayModel.maxGazePairs) { model.gazePairs = nil }

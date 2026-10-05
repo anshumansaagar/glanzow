@@ -1006,6 +1006,11 @@ import GlanzowKit
                 return "Calibration cancelled."
             }
             store.set(outcome.models)
+            for (key, c) in outcome.spotChecks { // would the tour alone have found the fixed spots?
+                func pct(_ v: Double) -> Int { Int((v * 100).rounded()) }
+                eventLog.append("spotCheck", ["display": key, "spots": c.spots, "tourOnlyX": pct(c.tourOnly.x), "tourOnlyY": pct(c.tourOnly.y),
+                                              "finalX": pct(c.final.x), "finalY": pct(c.final.y)])
+            }
             learning.reset()
             notifier.forget("drift")
             rebuildModels()

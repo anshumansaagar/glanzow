@@ -160,12 +160,14 @@ Each step is a published, widely used method rather than an invention:
 | Which screen | Nearest cluster by Mahalanobis distance, with a hysteresis margin and a dwell before switching |
 | Where on the screen | A ridge-regularised linear map from head and eye angles to screen position, fitted during calibration and refitted from your clicks as you work (WebGazer, Papoutsaki et al., IJCAI 2016) |
 | Window or pane choice | Dispersion-threshold fixation detection, I-DT (Salvucci & Goldberg, ETRA 2000) |
-| Calibration | Smooth-pursuit calibration (Pfeuffer et al., UIST 2013): follow a gleam around each screen |
+| Calibration | Smooth-pursuit calibration (Pfeuffer et al., UIST 2013): follow a gleam around each screen; then nine fixed points, the classic grid, looked at eyes-first as in real use |
 | Pointer follows eyes | MAGIC pointing (Zhai, Morimoto & Ihde, CHI 1999) |
 
 1. **Calibration** ("Teach my screens") has you follow a gleam that glides once around each
-   screen. Every frame becomes a training pair: where your head and eyes pointed, and where the
-   gleam was.
+   screen, then look at nine spots it jumps between. Every frame becomes a training pair: where
+   your head and eyes pointed, and where the gleam was. A gliding gleam is easy to follow with your
+   head; a jumping one is looked at eyes-first, the way you look at things in real use, so it is
+   what teaches the up-and-down role of the eyes.
 2. **Which screen**: each frame is matched to the nearest screen's cluster. A pose far from every
    screen (phone, desk) does nothing. A new screen must win for the settle time.
 3. **Where on the screen**: the gaze map turns head and eye angles into a point. When your eyes
