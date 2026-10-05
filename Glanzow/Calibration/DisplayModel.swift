@@ -36,6 +36,12 @@ public struct DisplayModel: Codable, Sendable, Equatable {
     public var calibratedAt: Date
     /// FR-P2-01: gaze position within this display. Nil for calibrations made before Phase 2.
     public var gaze: GazeMap?
+    /// What the gaze map was fitted on: the calibration's own pairs (at most 400, kept so the
+    /// map can be refitted) and the most recent clicks (at most 150).
+    public var gazePairs: [GazePair]?
+    public var clickPairs: [GazePair]?
+    public static let maxGazePairs = 400
+    public static let maxClickPairs = 150
 
     public static let minSamples = 15
 

@@ -211,3 +211,45 @@ extension SwitchControllerTests {
         await run(steps, tuning: tuning, layout: layout)
     }
 }
+
+/// I-DT fixation behaviour within a screen (FR-P2-01).
+final class FixationTests: XCTestCase {
+    func test_FR_P2_01_stillGazeIsAFixationAfterTheDuration() {
+        var f = FixationDetector(dispersion: 150, duration: 0.45)
+        var hits: [Double] = []
+        for k in 0..<12 {
+            let t = Double(k) / 15
+            if f.add(CGPoint(x: 700 + Double(k % 3) * 10, y: 500), at: t) != nil { hits.append(t) }
+        }
+        XCTAssertEqual(hits.first ?? -1, 7.0 / 15, accuracy: 1e-9)
+    }
+
+    func test_FR_P2_01_scatteredGazeIsNoFixation() {
+        var f = FixationDetector(dispersion: 150, duration: 0.45)
+        for k in 0..<30 { XCTAssertNil(f.add(CGPoint(x: k % 2 == 0 ? 300 : 700, y: 500), at: Double(k) / 15)) }
+    }
+
+    func test_FR_P2_01_centroidAveragesJitter() throws {
+        var f = FixationDetector(dispersion: 150, duration: 0.45)
+        var c: CGPoint?
+        for k in 0..<8 { c = f.add(CGPoint(x: k % 2 == 0 ? 480 : 560, y: 500), at: Double(k) / 15) }
+        XCTAssertEqual(try XCTUnwrap(c).x, 520, accuracy: 1e-9)
+    }
+}
+
+extension RegionSwitchTests {
+    /// Gaze flickering across the border between two windows averages to the border: no switch.
+    func test_FR_P2_01_flickerAcrossTheBorderDoesNotSwitch() async {
+        // yaw ±1.6 → x 460 / 540 around the 500 border; the left window is focused.
+        let steps: [SwitchControllerTests.Step] = (15..<60).map { .look(from: $0, to: $0 + 1, yaw: $0 % 2 == 0 ? -1.6 : 1.6) }
+        let calls = await harness.runForTests(steps, layout: layout)
+        XCTAssertTrue(calls.isEmpty, "\(calls)")
+    }
+
+    /// Jitter well inside the other window still switches after one fixation.
+    func test_FR_P2_01_jitteryGazeInsideTheOtherWindowStillSwitches() async {
+        let steps: [SwitchControllerTests.Step] = (15..<45).map { .look(from: $0, to: $0 + 1, yaw: $0 % 2 == 0 ? 7 : 9) }
+        let calls = await harness.runForTests(steps, layout: layout)
+        XCTAssertEqual(calls.map(\.d), ["@w2"])
+    }
+}

@@ -1,5 +1,27 @@
 import Foundation
 
+/// One training example for a gaze map: what the head and eyes did, and where the user was
+/// looking then (normalised on the display). Numbers only; stored with the display's calibration.
+public struct GazePair: Codable, Sendable, Equatable {
+    public var yaw: Double
+    public var pitch: Double
+    public var eyeX: Double?
+    public var eyeY: Double?
+    public var x: Double
+    public var y: Double
+
+    public init(_ s: PoseSample, target: SIMD2<Double>) {
+        yaw = s.yaw; pitch = s.pitch; eyeX = s.pupilOffset?.x; eyeY = s.pupilOffset?.y; x = target.x; y = target.y
+    }
+
+    var sample: PoseSample {
+        var s = PoseSample(timestamp: 0, yaw: yaw, pitch: pitch)
+        if let eyeX, let eyeY { s.pupilOffset = SIMD2(eyeX, eyeY) }
+        return s
+    }
+    var target: SIMD2<Double> { SIMD2(x, y) }
+}
+
 /// FR-P2-01: where on one display the user is looking, from head pose plus eye offset, as a
 /// linear fit to the calibration dots. Output is normalised: (0, 0) top-left, (1, 1) bottom-right.
 public struct GazeMap: Codable, Sendable, Equatable {
@@ -10,10 +32,17 @@ public struct GazeMap: Codable, Sendable, Equatable {
     /// Root-mean-square fit error in normalised units (0.1 = a tenth of the screen).
     public var headError: Double
     public var eyesError: Double?
+    /// Which eye measurement the eye model was fitted on. Maps from an older measurement fall
+    /// back to the head model until the user recalibrates (nil: Vision's pupil points, pre-iris).
+    public var eyeSource: String?
+    public static let currentEyeSource = "iris-1"
 
-    public init(head: [[Double]], eyes: [[Double]]?, headError: Double, eyesError: Double?) {
-        self.head = head; self.eyes = eyes; self.headError = headError; self.eyesError = eyesError
+    public init(head: [[Double]], eyes: [[Double]]?, headError: Double, eyesError: Double?, eyeSource: String? = GazeMap.currentEyeSource) {
+        self.head = head; self.eyes = eyes; self.headError = headError; self.eyesError = eyesError; self.eyeSource = eyeSource
     }
+
+    /// The eye model is usable with today's eye measurement.
+    public var eyesCurrent: Bool { eyes != nil && eyeSource == Self.currentEyeSource }
 
     /// Pupil offsets are about ±0.1, head angles about ±30°; scaling pupils by 100 puts both on
     /// the same footing so the small ridge term treats them alike.
@@ -30,13 +59,22 @@ public struct GazeMap: Codable, Sendable, Equatable {
     /// `angles` lets the caller pass distance-compensated yaw and pitch.
     public func point(_ s: PoseSample, angles: SIMD2<Double>? = nil) -> SIMD2<Double> {
         let a = angles ?? s.angles
-        let (rows, f) = eyes.flatMap { e in Self.features(s, angles: a, eyes: true).map { (e, $0) } }
+        let usable = eyeSource == Self.currentEyeSource ? eyes : nil
+        let (rows, f) = usable.flatMap { e in Self.features(s, angles: a, eyes: true).map { (e, $0) } }
             ?? (head, Self.features(s, angles: a, eyes: false)!)
         return SIMD2(zip(rows[0], f).map(*).reduce(0, +), zip(rows[1], f).map(*).reduce(0, +))
     }
 
     /// The error of the model `point` would use for this sample.
-    public func error(for s: PoseSample) -> Double { s.pupilOffset != nil ? (eyesError ?? headError) : headError }
+    public func error(for s: PoseSample) -> Double { s.pupilOffset != nil && eyesCurrent ? (eyesError ?? headError) : headError }
+
+    /// WebGazer-style refit (Papoutsaki et al., IJCAI 2016): calibration pairs plus the clicks of
+    /// real use, where the eyes are on the click point. Clicks count three times each, since they
+    /// are few but come from how the user actually looks.
+    public static func fit(calibration: [GazePair], clicks: [GazePair]) -> GazeMap? {
+        let pairs = (calibration + clicks + clicks + clicks).map { (sample: $0.sample, target: $0.target) }
+        return fit(pairs)
+    }
 
     /// Least squares over (sample, normalised dot position) pairs. Nil with too few samples or
     /// fewer than three distinct dot positions (a plane needs three).

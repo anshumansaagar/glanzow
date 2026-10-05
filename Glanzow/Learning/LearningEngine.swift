@@ -5,6 +5,8 @@ import Foundation
 public struct LearningEngine: Sendable {
     public struct Update: Sendable {
         public var model: DisplayModel?
+        /// The pose at the moment of a click that taught something: a gaze-map training example.
+        public var sample: PoseSample?
         /// Set once when more than 30% of the last 50 clicks disagreed with the classifier.
         public var driftAlert: Double?
     }
@@ -49,6 +51,7 @@ public struct LearningEngine: Sendable {
         if var m = model, let d = classifier.distances(s).first(where: { $0.key == display })?.distance, d <= classifier.rejectThreshold {
             m.learn(classifier.compensated(s)) // FR-LRN-02
             update.model = m
+            update.sample = s
         }
         return update
     }

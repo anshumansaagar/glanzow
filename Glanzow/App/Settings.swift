@@ -277,6 +277,7 @@ struct CalibrationSettings: View {
         let date = m.calibratedAt.formatted(date: .abbreviated, time: .shortened)
         if !model.cameraID.isEmpty && m.cameraID != model.cameraID { return "Calibrated \(date) with a different camera" }
         guard let g = m.gaze else { return "Calibrated \(date). Recalibrate to focus windows within it" }
+        if g.eyes != nil && !g.eyesCurrent { return "Calibrated \(date). Recalibrate to use eye tracking" }
         return "Calibrated \(date). Window aim within about \(max(1, Int(((g.eyesError ?? g.headError) * 100).rounded())))%"
     }
 }

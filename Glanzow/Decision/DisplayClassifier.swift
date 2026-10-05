@@ -14,6 +14,8 @@ public protocol DisplayClassifier: Sendable {
     func distances(_ sample: PoseSample) -> [(key: DisplayKey, distance: Double)]
     /// FR-P2-01: normalised gaze point on display `key`, nil without a gaze map.
     func gazePoint(_ sample: PoseSample, on key: DisplayKey) -> SIMD2<Double>?
+    /// True when display `key`'s gaze map uses eye position, so samples without it are skipped.
+    func expectsEyes(on key: DisplayKey) -> Bool
 }
 
 /// §6.3 nearest-cluster classifier on (yaw, pitch), with §6.5 distance compensation.
@@ -51,6 +53,8 @@ public struct MahalanobisClassifier: DisplayClassifier {
     public func gazePoint(_ s: PoseSample, on key: DisplayKey) -> SIMD2<Double>? {
         gaze[key]?.point(s, angles: compensated(s))
     }
+
+    public func expectsEyes(on key: DisplayKey) -> Bool { gaze[key]?.eyesCurrent ?? false }
 
     public var keys: [DisplayKey] { clusters.map(\.key) }
 

@@ -115,6 +115,9 @@ public struct Tuning: Sendable, Equatable {
     /// Hysteresis within a screen: the gaze must leave the focused region by this fraction of
     /// the display width, and land this far (halved) inside the new one.
     public var regionMargin = 0.05
+    /// I-DT fixation: gaze points of the last `regionDwell` must spread less than this fraction
+    /// of the display width (box width plus height) to count as looking at one place.
+    public var regionDispersion = 0.15
 
     public init() {}
 

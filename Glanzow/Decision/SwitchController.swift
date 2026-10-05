@@ -50,7 +50,7 @@ public actor SwitchController {
     private var inFlight = false
     private var layout: ScreenLayout?
     private var regionPending: String?
-    private var regionSince = 0.0
+    private var fixation = FixationDetector(dispersion: 150, duration: 0.45)
     private var gaze: CGPoint?
     private var blockedBy: String?
 
@@ -69,6 +69,7 @@ public actor SwitchController {
 
     /// FR-P2: the current display's windows and panes, refreshed by the app.
     public func update(layout: ScreenLayout?) {
+        if layout?.display != self.layout?.display { fixation.reset() }
         self.layout = layout
         if let id = regionPending, layout?.regions.contains(where: { $0.id == id }) != true { regionPending = nil }
     }
@@ -79,7 +80,10 @@ public actor SwitchController {
     }
 
     /// The display holding the focused window, whoever focused it (user click, ⌘-Tab, us).
-    public func setCurrent(_ key: DisplayKey?) { current = key }
+    public func setCurrent(_ key: DisplayKey?) {
+        if key != current { fixation.reset() }
+        current = key
+    }
 
     public func snapshot() -> Snapshot {
         Snapshot(classification: latest, current: current, pending: pending, noFace: noFace, paused: paused,
@@ -96,6 +100,7 @@ public actor SwitchController {
             // face restarts the dwell (and with it the 1 s typing override). Switches less than
             // carrying the dwell across short dropouts. FR-TRK-06's "No face" state still waits 1 s.
             pending = nil
+            fixation.reset()
             if !noFace, t - lastFace >= tuning.noFaceTimeout { noFace = true }
         case .pose(let s):
             lastFace = s.timestamp
@@ -115,7 +120,12 @@ public actor SwitchController {
                 }
             case .candidate(let d):
                 await consider(d, at: s.timestamp)
-                if d == current { await considerRegion(s) } else { regionPending = nil }
+                if d == current {
+                    await considerRegion(s)
+                } else {
+                    regionPending = nil
+                    fixation.reset() // eyes on another screen: no fixation here
+                }
             }
         }
     }
@@ -132,36 +142,40 @@ public actor SwitchController {
         await attempt(d, at: t, confirmed: false)
     }
 
-    /// FR-P2-01…04: within the current display, move focus to the window or pane under the
-    /// gaze point once it has stayed there for the region dwell.
+    /// FR-P2-01…04: within the current display, move focus to the window or pane the user
+    /// fixates. A fixation (I-DT) over the region dwell replaces "every sample inside", so one
+    /// noisy sample can't restart the wait and the decision uses the averaged gaze point.
     private func considerRegion(_ s: PoseSample) async {
         let t = s.timestamp
         guard tuning.focusWithinScreen, !tuning.confirmMode, let cur = current, let layout, layout.display == cur,
               let g = classifier.gazePoint(s, on: cur) else {
             regionPending = nil
             gaze = nil
+            fixation.reset()
             return
         }
+        // A blink leaves the frame without an eye reading: skip it rather than mix in the cruder
+        // head-only estimate, which would widen the fixation's spread.
+        if classifier.expectsEyes(on: cur), s.pupilOffset == nil { return }
         let p = CGPoint(x: layout.bounds.minX + g.x * layout.bounds.width, y: layout.bounds.minY + g.y * layout.bounds.height)
         gaze = p
+        fixation.duration = tuning.regionDwell
+        fixation.dispersion = tuning.regionDispersion * layout.bounds.width
+        guard let centre = fixation.add(p, at: t) else { return }
         let margin = tuning.regionMargin * layout.bounds.width
         let focusedRegion = layout.focusedRegion
-        if let r = focusedRegion, r.frame.insetBy(dx: -margin, dy: -margin).contains(p) { // hysteresis
+        if let r = focusedRegion, r.frame.insetBy(dx: -margin, dy: -margin).contains(centre) { // hysteresis
             regionPending = nil
             return
         }
-        guard let target = layout.region(at: p, inset: margin / 2), target.id != layout.focused,
+        guard let target = layout.region(at: centre, inset: margin / 2), target.id != layout.focused,
               // Looking at a pane's own window chrome (tab bar, title) keeps the pane.
               !(focusedRegion.map { !target.isPane && $0.windowID == target.windowID } ?? false) else {
             regionPending = nil
             return
         }
-        if target.id != regionPending {
-            regionPending = target.id
-            regionSince = t
-            return
-        }
-        guard t - regionSince >= tuning.regionDwell, t >= retryAfter, !inFlight else { return }
+        regionPending = target.id
+        guard t >= retryAfter, !inFlight else { return }
         if t - input.lastMouseActivity < tuning.mouseQuiet { blockedBy = "mouse"; return }
         // FR-P2-04: while typing, windows and panes stay put. No sustained-look override here.
         if let pause = tuning.typingPause, t - input.lastKeystroke < pause { blockedBy = "typing"; return }
@@ -175,13 +189,14 @@ public actor SwitchController {
         defer { inFlight = false }
         let started = now()
         let outcome = await focus.focus(region: target)
-        let record = SwitchRecord(time: t, pendingSince: regionSince, from: cur, to: cur, outcome: outcome,
+        let record = SwitchRecord(time: t, pendingSince: t - tuning.regionDwell, from: cur, to: cur, outcome: outcome,
                                   focusDuration: now() - started, region: target.id)
         switch outcome {
         case .focusedWindow, .focusedPane, .pointerOnly:
             self.layout?.focused = target.id
             regionPending = nil
             blockedBy = nil
+            fixation.reset() // the next move needs a fresh fixation
         case .skipped(let why):
             blockedBy = why
             retryAfter = t + 1

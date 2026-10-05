@@ -89,3 +89,26 @@ final class PaneKeysTests: XCTestCase {
         XCTAssertNil(PaneKeys(bundle: nil))
     }
 }
+
+/// FR-P2-01 implicit calibration: clicks during real use pull the gaze map toward how the user looks.
+final class ClickRefitTests: XCTestCase {
+    func test_FR_P2_01_clicksCorrectABiasedCalibration() throws {
+        // Calibration taught x = 0.5 + yaw/40; in real use this user's x is 0.1 further right.
+        func pair(yaw: Double, x: Double) -> GazePair { GazePair(PoseSample(timestamp: 0, yaw: yaw, pitch: 0), target: SIMD2(x, 0.5)) }
+        let calibration = stride(from: -16.0, through: 16.0, by: 2).flatMap { y in [pair(yaw: y, x: 0.5 + y / 40), pair(yaw: y, x: 0.5 + y / 40)] }
+        let clicks = stride(from: -16.0, through: 16.0, by: 1.5).map { pair(yaw: $0, x: 0.6 + $0 / 40) }
+        let before = try XCTUnwrap(GazeMap.fit(calibration: calibration, clicks: []))
+        let after = try XCTUnwrap(GazeMap.fit(calibration: calibration, clicks: clicks))
+        let s = PoseSample(timestamp: 0, yaw: 4, pitch: 0)
+        XCTAssertEqual(before.point(s).x, 0.6, accuracy: 0.01)
+        XCTAssertGreaterThan(after.point(s).x, 0.65, "moved most of the way toward the clicks (0.7)")
+    }
+
+    func test_storedPairsSurviveSanitising() throws {
+        var m = DisplayModel(key: "k", name: "A", mean: .zero, covariance: Cov2(xx: 9, xy: 0, yy: 9), meanFaceScale: 0.2, cameraID: "c", sampleCount: 20)
+        m.clickPairs = [GazePair(PoseSample(timestamp: 0, yaw: 1, pitch: 2, pupilOffset: SIMD2(0.1, 0)), target: SIMD2(0.3, 0.4))]
+        XCTAssertEqual(CalibrationStore.sanitized(m)?.clickPairs?.count, 1)
+        m.clickPairs = [GazePair(PoseSample(timestamp: 0, yaw: .infinity, pitch: 2), target: SIMD2(0.3, 0.4))]
+        XCTAssertNil(CalibrationStore.sanitized(m)?.clickPairs)
+    }
+}

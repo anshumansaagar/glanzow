@@ -10,7 +10,8 @@ public struct PoseSample: Codable, Sendable, Equatable {
     public var roll: Double
     /// Face bounding-box width in normalised image coordinates; grows as the user leans in.
     public var faceScale: Double
-    /// Pupil centre minus eye-contour centroid, over eye width, averaged across eyes (FR-TRK-03).
+    /// Where the eyes point within their sockets, in eye widths: the iris centre relative to the
+    /// middle of the corner-to-corner line, averaged over open eyes (FR-TRK-03; IrisLocator).
     public var pupilOffset: SIMD2<Double>?
     public var confidence: Double
 
@@ -175,19 +176,34 @@ public final class PoseTracker: NSObject, PoseSource, AVCaptureVideoDataOutputSa
         return face
     }
 
-    /// §6.1: pupil centre minus eye-contour centroid, normalised by eye width, averaged over both eyes.
+    /// FR-TRK-03, FR-P2-01: where the eyes point, in eye widths. Vision's eye contours give each
+    /// eye's corners and how open it is; the iris itself is found in the camera image by
+    /// IrisLocator, because Vision's own pupil points mostly follow the shape of the eye rather
+    /// than the gaze. Blinks and half-closed eyes give no reading; two open eyes are averaged.
     private func pupilOffset(_ face: VNFaceObservation, _ pixels: CVPixelBuffer) -> SIMD2<Double>? {
         landmarkRequest.inputFaceObservations = [face]
         guard (try? handler.perform([landmarkRequest], on: pixels, orientation: .up)) != nil,
-              let marks = landmarkRequest.results?.first?.landmarks else { return nil }
-        let eyes = [(marks.leftPupil, marks.leftEye), (marks.rightPupil, marks.rightEye)].compactMap { pupil, eye -> SIMD2<Double>? in
-            guard let p = pupil?.normalizedPoints.first, let contour = eye?.normalizedPoints, !contour.isEmpty else { return nil }
-            let xs = contour.map { Double($0.x) }, ys = contour.map { Double($0.y) }
-            let width = xs.max()! - xs.min()!
-            guard width > 0 else { return nil }
-            let centroid = SIMD2(xs.reduce(0, +), ys.reduce(0, +)) / Double(contour.count)
-            return (SIMD2(Double(p.x), Double(p.y)) - centroid) / width
+              let result = landmarkRequest.results?.first, let marks = result.landmarks else { return nil }
+        let w = Double(CVPixelBufferGetWidth(pixels)), h = Double(CVPixelBufferGetHeight(pixels))
+        let box = result.boundingBox
+        // Landmarks are normalised to the face box with the origin bottom-left; pixels are top-left.
+        func inImage(_ p: CGPoint) -> SIMD2<Double> {
+            SIMD2((Double(box.minX) + Double(p.x) * Double(box.width)) * w,
+                  (1 - (Double(box.minY) + Double(p.y) * Double(box.height))) * h)
         }
-        return eyes.isEmpty ? nil : eyes.reduce(.zero, +) / Double(eyes.count)
+        let eyes = [marks.leftEye, marks.rightEye].compactMap { region -> SIMD2<Double>? in
+            guard let points = region?.normalizedPoints, points.count >= 4 else { return nil }
+            let contour = points.map(inImage)
+            guard let a = contour.min(by: { $0.x < $1.x }), let b = contour.max(by: { $0.x < $1.x }) else { return nil }
+            let width = ((b - a) * (b - a)).sum().squareRoot()
+            let ys = contour.map(\.y)
+            guard width > 0, (ys.max()! - ys.min()!) / width > 0.12 else { return nil } // a blink
+            guard let patch = IrisLocator.patch(fromLuma: pixels, corners: a, b), let c = IrisLocator.centre(of: patch) else { return nil }
+            return IrisLocator.eyeOffset(iris: c, width: patch.width, height: patch.height)
+        }
+        guard !eyes.isEmpty else { return nil }
+        // Both eyes point the same way; a large disagreement means one reading went wrong.
+        if eyes.count == 2, ((eyes[0] - eyes[1]) * (eyes[0] - eyes[1])).sum().squareRoot() > 0.25 { return nil }
+        return eyes.reduce(.zero, +) / Double(eyes.count)
     }
 }

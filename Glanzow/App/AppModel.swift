@@ -90,6 +90,7 @@ import GlanzowKit
     private var eyesNeeded = false
     private var perfTimer: Timer?
     private var learning = LearningEngine()
+    private var clicksSinceRefit: [DisplayKey: Int] = [:]
     private var governor = FrameRateGovernor()
     private var saveScheduled = false
     private var preferredCamera: String?
@@ -483,7 +484,19 @@ import GlanzowKit
         recorder.record(.click, at: click.time, display: key)
         guard switchingEnabled, defaults.bool(forKey: Pref.learnFromClicks) else { return }
         let update = learning.click(at: click.time, on: key, classifier: classifier, model: store.model(key))
-        if let m = update.model {
+        if var m = update.model {
+            // FR-P2-01 implicit calibration: the click point is where the eyes were.
+            if let s = update.sample, m.gaze != nil, let d = registry.display(key) {
+                let target = SIMD2(Double((click.location.x - d.bounds.minX) / d.bounds.width), Double((click.location.y - d.bounds.minY) / d.bounds.height))
+                m.clickPairs = Array(((m.clickPairs ?? []) + [GazePair(s, target: target)]).suffix(DisplayModel.maxClickPairs))
+                clicksSinceRefit[key, default: 0] += 1
+                if clicksSinceRefit[key]! >= 10, let refit = GazeMap.fit(calibration: m.gazePairs ?? [], clicks: m.clickPairs ?? []) {
+                    clicksSinceRefit[key] = 0
+                    m.gaze = refit
+                    eventLog.append("gazeRefit", ["display": key, "clicks": m.clickPairs?.count ?? 0,
+                                                  "errorPercent": Int((((refit.eyesError ?? refit.headError)) * 100).rounded())])
+                }
+            }
             store.set([m], persist: false)
             rebuildModels()
             scheduleSave()
@@ -602,11 +615,12 @@ import GlanzowKit
         if displays.contains(where: \.ambiguous) {
             notifier.once("ambiguous", title: "Identical monitors detected", body: Self.ambiguousNote)
         }
-        // FR-P2-01: calibrations from before window focus have no gaze map.
+        // FR-P2-01: calibrations from before window focus have no gaze map, and maps fitted on
+        // the old eye measurement can't use the new iris tracking.
         if uncalibrated.isEmpty, defaults.bool(forKey: Pref.focusWithinScreen),
-           store.valid(for: displays, cameraID: cameraID).contains(where: { $0.gaze == nil }) {
-            notifier.once("needsGaze", title: "Recalibrate to focus windows",
-                          body: "Glanzow can now focus the window or pane you look at within a screen. Recalibrate once from the menu to turn it on.")
+           store.valid(for: displays, cameraID: cameraID).contains(where: { $0.gaze.map { $0.eyes != nil && !$0.eyesCurrent } ?? true }) {
+            notifier.once("needsGaze", title: "Recalibrate for sharper window focus",
+                          body: "Glanzow now tracks your eyes, not just your head, to pick the window or pane you look at. Recalibrate once from the menu to turn it on.")
         }
         let fresh = uncalibrated.filter { !promptedFor.contains($0.key) }
         guard !fresh.isEmpty, !calibrating, defaults.bool(forKey: Pref.onboardingDone) else { return }

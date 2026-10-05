@@ -55,6 +55,8 @@ import QuartzCore
             }
             if var m = DisplayModel.fit(key: d.key, name: d.name, cameraID: cameraID, samples: pairs.map(\.sample)) {
                 m.gaze = GazeMap.fit(pairs) // FR-P2-01
+                let stride = max(1, pairs.count / DisplayModel.maxGazePairs) // keep an even spread
+                m.gazePairs = Swift.stride(from: 0, to: pairs.count, by: stride).prefix(DisplayModel.maxGazePairs).map { GazePair(pairs[$0].sample, target: pairs[$0].target) }
                 outcome.models.append(m)
             } else {
                 outcome.failed.append(d)
