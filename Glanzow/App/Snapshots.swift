@@ -47,6 +47,7 @@ import GlanzowKit
             icon.imageScaling = .scaleProportionallyUpOrDown
             save(icon, size: CGSize(width: 72, height: 72), dir.appending(path: "glyph-\(name).png"))
         }
+        menuBar(dir.appending(path: "menubar.png"))
         save(FocusFeedback.preview(), size: CGSize(width: 900, height: 360), dir.appending(path: "flash.png"))
         save(FocusFeedback.spotlightPreview(strength: 0.22), size: CGSize(width: 960, height: 600), dir.appending(path: "spotlight-first.png"))
         save(FocusFeedback.spotlightPreview(strength: 0.14), size: CGSize(width: 960, height: 600), dir.appending(path: "spotlight-seasoned.png"))
@@ -56,6 +57,42 @@ import GlanzowKit
         let calibration = CalibrationOverlay.preview(size: CGSize(width: 1440, height: 900))
         save(calibration, size: CGSize(width: 1440, height: 900), dir.appending(path: "calibration.png"))
         print("snapshots written to \(dir.path)")
+    }
+
+    /// Every glyph at true size on light and dark bars, at 1× and 2×, blown up 4× with hard pixel
+    /// edges: what a 1× external display and a Retina screen really show.
+    private static func menuBar(_ url: URL) {
+        let styles: [Glyph.Style] = [.following, .holding, .faint, .attention, .learning]
+        let cell = 26, w = styles.count * cell, h = 2 * cell
+        func strip(scale: Int) -> NSBitmapImageRep {
+            let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: w * scale, pixelsHigh: h * scale, bitsPerSample: 8, samplesPerPixel: 4,
+                                       hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)!
+            rep.size = NSSize(width: w, height: h)
+            NSGraphicsContext.saveGraphicsState()
+            NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
+            for (row, (bar, ink)) in [(NSColor(white: 0.93, alpha: 1), NSColor.black), (NSColor(white: 0.16, alpha: 1), NSColor.white)].enumerated() {
+                bar.setFill(); CGRect(x: 0, y: row * cell, width: w, height: cell).fill()
+                for (i, style) in styles.enumerated() {
+                    let tinted = NSImage(size: NSSize(width: 18, height: 18), flipped: false) { r in
+                        Glyph.image(style, description: "").draw(in: r)
+                        ink.set(); r.fill(using: .sourceAtop)
+                        return true
+                    }
+                    tinted.draw(in: CGRect(x: i * cell + 4, y: row * cell + 4, width: 18, height: 18))
+                }
+            }
+            NSGraphicsContext.restoreGraphicsState()
+            return rep
+        }
+        let out = NSImage(size: NSSize(width: w * 8 + 24, height: h * 4))
+        out.lockFocus()
+        NSGraphicsContext.current?.imageInterpolation = .none
+        NSImage(cgImage: strip(scale: 1).cgImage!, size: .zero).draw(in: CGRect(x: 0, y: 0, width: w * 4, height: h * 4))
+        NSImage(cgImage: strip(scale: 2).cgImage!, size: .zero).draw(in: CGRect(x: w * 4 + 24, y: 0, width: w * 4, height: h * 4))
+        out.unlockFocus()
+        if let tiff = out.tiffRepresentation, let png = NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:]) {
+            try? png.write(to: url)
+        }
     }
 
     private static func save(_ view: NSView, size: CGSize, _ url: URL) {

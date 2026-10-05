@@ -8,6 +8,8 @@
 	<string>Glanzow</string>
 	<key>CFBundleDisplayName</key>
 	<string>Glanzow</string>
+	<key>CFBundleIconFile</key>
+	<string>Glanzow</string>
 	<key>CFBundleExecutable</key>
 	<string>Glanzow</string>
 	<key>CFBundlePackageType</key>

@@ -15,6 +15,7 @@ app:
 	rm -rf $(APP) && mkdir -p $(APP)/Contents/MacOS $(APP)/Contents/Resources
 	cp "$$(swift build -c $(CONFIG) --show-bin-path)/Glanzow" $(APP)/Contents/MacOS/
 	cp Resources/Info.plist $(APP)/Contents/
+	cp Resources/Glanzow.icns $(APP)/Contents/Resources/
 	codesign --force --options runtime $(TIMESTAMP) --entitlements Resources/Glanzow.entitlements --sign "$(SIGN_ID)" $(APP)
 	@echo "Built $(APP) (signed: $(SIGN_ID))"
 	@if [ "$(CONFIG)" = "release" ]; then $(MAKE) --no-print-directory verify; fi

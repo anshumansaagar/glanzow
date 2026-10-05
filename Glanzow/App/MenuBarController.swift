@@ -67,7 +67,7 @@ import GlanzowKit
         add(menu, "Undo Last Switch   \(defaults.string(forKey: Pref.undoHotkeyLabel) ?? "")", #selector(undo), symbol: "arrow.uturn.backward")
 
         let teach = NSMenuItem(title: "Teach My Screens", action: nil, keyEquivalent: "")
-        teach.image = NSImage(systemSymbolName: "sparkles", accessibilityDescription: nil)
+        teach.image = NSImage(systemSymbolName: "display.2", accessibilityDescription: nil)
         let sub = NSMenu()
         add(sub, "All Screens", #selector(recalibrateAll))
         sub.addItem(.separator())

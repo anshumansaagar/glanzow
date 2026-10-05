@@ -27,7 +27,7 @@ struct SettingsView: View {
         }
         var symbol: String {
             switch self {
-            case .following: "sparkles"
+            case .following: "" // the app's own mark, below
             case .windows: "rectangle.split.2x1"
             case .eyes: "eye"
             case .feel: "paintbrush"
@@ -37,12 +37,19 @@ struct SettingsView: View {
             case .advanced: "slider.horizontal.3"
             }
         }
+        @ViewBuilder var icon: some View {
+            if self == .following {
+                Image(nsImage: Glyph.image(.following, description: "")).renderingMode(.template).resizable().scaledToFit().frame(width: 16, height: 16)
+            } else {
+                Image(systemName: symbol)
+            }
+        }
     }
 
     var body: some View {
         NavigationSplitView {
             List(Pane.allCases.filter { $0 != .advanced || showDebug }, selection: $pane) { p in
-                Label(p.title, systemImage: p.symbol).tag(p)
+                Label { Text(p.title) } icon: { p.icon }.tag(p)
             }
             .navigationSplitViewColumnWidth(190)
         } detail: {
