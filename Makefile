@@ -8,7 +8,7 @@ SIGN_ID    ?= $(shell security find-identity -v -p codesigning | awk -F'"' '/Dev
 TIMESTAMP  ?= --timestamp=none
 NOTARY_PROFILE ?= glanzow-notary
 
-.PHONY: app run test replay dmg notarize reset-permissions clean
+.PHONY: app run test replay dmg notarize reset-permissions diagnostics clean
 
 app:
 	swift build -c $(CONFIG) --product Glanzow
@@ -43,6 +43,10 @@ reset-permissions:
 	-tccutil reset Camera $(BUNDLE_ID)
 	-tccutil reset Accessibility $(BUNDLE_ID)
 	-tccutil reset ListenEvent $(BUNDLE_ID)
+
+# One text file on the Desktop with settings, calibration, switch timings, CPU and logs.
+diagnostics:
+	@scripts/diagnostics.sh
 
 clean:
 	rm -rf build .build

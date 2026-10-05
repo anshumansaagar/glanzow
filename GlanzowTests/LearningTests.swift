@@ -48,16 +48,17 @@ final class LearningTests: XCTestCase {
         XCTAssertEqual(l.outcomes.count, 50)
     }
 
-    func test_FR_TRK_08_idleDropsTo5fpsAndMovementRestores15() {
+    func test_FR_TRK_08_steadyThenIdleThenMovementRestores15() {
         var g = FrameRateGovernor()
         var changes: [(Double, Int)] = []
         for k in 0..<(35 * 15) { // 35 s still, small jitter under 2°
             let t = Double(k) / 15
             if let f = g.update(.pose(PoseSample(timestamp: t, yaw: k % 2 == 0 ? 0.5 : -0.5, pitch: 0))) { changes.append((t, f)) }
         }
-        XCTAssertEqual(changes.count, 1)
-        XCTAssertEqual(changes[0].1, 5)
-        XCTAssertEqual(changes[0].0, 30, accuracy: 0.1)
+        XCTAssertEqual(changes.map(\.1), [8, 5])
+        XCTAssertEqual(changes[0].0, 1.5, accuracy: 0.1)
+        XCTAssertEqual(changes[1].0, 30, accuracy: 0.1)
         XCTAssertEqual(g.update(.pose(PoseSample(timestamp: 36, yaw: 10, pitch: 0))), 15)
+        XCTAssertNil(g.update(.pose(PoseSample(timestamp: 36.1, yaw: 10.5, pitch: 0))), "still moving: stays at 15")
     }
 }

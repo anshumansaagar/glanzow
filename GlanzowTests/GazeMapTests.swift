@@ -71,3 +71,21 @@ struct SplitMix {
     /// Uniform in ±amplitude·√3, so the standard deviation is `amplitude`.
     mutating func noise(_ amplitude: Double) -> Double { (next() * 2 - 1) * amplitude * 3.0.squareRoot() }
 }
+
+/// FR-P2-02: the pane shortcut points toward the target pane.
+final class PaneKeysTests: XCTestCase {
+    func test_FR_P2_02_arrowPointsTowardTheTargetPane() {
+        let c = CGPoint(x: 500, y: 500)
+        XCTAssertEqual(PaneKeys.arrow(toward: CGPoint(x: 900, y: 520), from: c), 124) // right
+        XCTAssertEqual(PaneKeys.arrow(toward: CGPoint(x: 100, y: 450), from: c), 123) // left
+        XCTAssertEqual(PaneKeys.arrow(toward: CGPoint(x: 520, y: 900), from: c), 125) // below (y grows down)
+        XCTAssertEqual(PaneKeys.arrow(toward: CGPoint(x: 480, y: 100), from: c), 126) // above
+    }
+
+    func test_FR_P2_02_knownAppsHaveShortcutsOthersDont() {
+        XCTAssertNotNil(PaneKeys(bundle: "com.googlecode.iterm2"))
+        XCTAssertNotNil(PaneKeys(bundle: "com.microsoft.VSCode"))
+        XCTAssertNil(PaneKeys(bundle: "com.apple.Safari"))
+        XCTAssertNil(PaneKeys(bundle: nil))
+    }
+}

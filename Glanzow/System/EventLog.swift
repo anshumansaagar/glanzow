@@ -17,7 +17,7 @@ public final class EventLog: @unchecked Sendable {
         data.append(0x0A)
         queue.async { [url, maxBytes] in
             let fm = FileManager.default
-            try? fm.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try? Paths.makePrivateDirectory(url.deletingLastPathComponent())
             // ponytail: one rotation; keeps the last ~10 MB, plenty for a 3-workday NFR-03 review.
             if let size = try? fm.attributesOfItem(atPath: url.path)[.size] as? Int, size > maxBytes {
                 let old = url.appendingPathExtension("1")
@@ -31,6 +31,7 @@ public final class EventLog: @unchecked Sendable {
                 try? h.close()
             } else {
                 try? data.write(to: url)
+                try? fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path) // this user only
             }
         }
     }

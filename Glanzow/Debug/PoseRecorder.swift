@@ -78,12 +78,13 @@ public final class PoseRecorder: @unchecked Sendable {
     /// Stops and writes the recording; returns its file URL.
     public func stop() throws -> URL? {
         guard let rec = state.withLock({ s -> Recording? in defer { s.recording = nil }; return s.recording }) else { return nil }
-        try FileManager.default.createDirectory(at: Self.directory, withIntermediateDirectories: true)
+        try Paths.makePrivateDirectory(Self.directory)
         let stamp = ISO8601DateFormatter().string(from: rec.recordedAt).replacingOccurrences(of: ":", with: "-")
         let url = Self.directory.appending(path: "pose-\(stamp).json")
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         try encoder.encode(rec).write(to: url, options: .atomic)
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
         return url
     }
 }

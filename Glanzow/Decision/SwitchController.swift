@@ -178,7 +178,7 @@ public actor SwitchController {
         let record = SwitchRecord(time: t, pendingSince: regionSince, from: cur, to: cur, outcome: outcome,
                                   focusDuration: now() - started, region: target.id)
         switch outcome {
-        case .focusedWindow, .pointerOnly:
+        case .focusedWindow, .focusedPane, .pointerOnly:
             self.layout?.focused = target.id
             regionPending = nil
             blockedBy = nil
@@ -222,7 +222,7 @@ public actor SwitchController {
         let record = SwitchRecord(time: t, pendingSince: pendingSince, from: from, to: d, outcome: outcome,
                                   focusDuration: now() - started)
         switch outcome {
-        case .focusedWindow, .pointerOnly:
+        case .focusedWindow, .focusedPane, .pointerOnly:
             // If the user focused something else while we were raising, theirs wins.
             if current == from { current = d }
             blockedBy = nil

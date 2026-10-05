@@ -107,6 +107,7 @@ public final class EventTapInputMonitor: InputMonitor, @unchecked Sendable {
             let p = event.location
             let own = state.withLock { s in s.warp.map { t - $0.t < 0.15 && hypot(p.x - $0.p.x, p.y - $0.p.y) < 2 } ?? false }
             guard !own else { return }
+            PerfMeter.shared.mouseEvent()
             let key = displays.display(at: p)?.key
             state.withLock { s in
                 s.mouse = t

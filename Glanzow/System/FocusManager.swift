@@ -5,6 +5,8 @@ import os
 
 public enum FocusOutcome: Sendable, Equatable {
     case focusedWindow
+    /// A split pane took focus; the string says how (accessibility, shortcut, click, already).
+    case focusedPane(String)
     /// The display had no windows; only the pointer moved (FR-FOC-05).
     case pointerOnly
     case skipped(String)
@@ -129,22 +131,28 @@ extension Array {
 
     /// FR-P2-02: apps whose split panes get focus individually. Everything else — browsers,
     /// chat, documents — switches whole windows only (FR-P2-03), so page regions never steal focus.
-    static let paneApps: Set<String> = [
+    static let paneApps: Set<String> = Set([
         "com.googlecode.iterm2", "com.apple.Terminal", "com.mitchellh.ghostty", "net.kovidgoyal.kitty",
-        "com.github.wez.wezterm", "dev.warp.Warp-Stable", "com.microsoft.VSCode", "com.microsoft.VSCodeInsiders",
-        "com.todesktop.230313mzl4w4u92", "com.vscodium", "dev.zed.Zed", "com.apple.dt.Xcode", "com.sublimetext.4",
-    ]
+        "com.github.wez.wezterm", "dev.warp.Warp-Stable", "dev.zed.Zed", "com.apple.dt.Xcode", "com.sublimetext.4",
+    ]).union(electronApps)
+    /// Electron editors build their accessibility tree only once an assistive app asks for it.
+    static let electronApps: Set<String> = ["com.microsoft.VSCode", "com.microsoft.VSCodeInsiders", "com.todesktop.230313mzl4w4u92", "com.vscodium"]
+
+    static func bundle(_ pid: pid_t) -> String? { NSRunningApplication(processIdentifier: pid)?.bundleIdentifier }
 
     static func hasPanes(_ pid: pid_t) -> Bool {
-        guard let b = NSRunningApplication(processIdentifier: pid)?.bundleIdentifier else { return false }
+        guard let b = bundle(pid) else { return false }
         return paneApps.contains(b) || b.hasPrefix("com.jetbrains.")
     }
 
     private var paneCache: [CGWindowID: (bounds: CGRect, at: TimeInterval, panes: [(frame: CGRect, element: AXUIElement)])] = [:]
+    private var electronAsked: Set<pid_t> = []
 
     /// The windows on display `key`, front to back, with the split panes of terminal and editor
     /// windows, and which of them has focus now.
     public func layout(for key: DisplayKey, panes includePanes: Bool) -> ScreenLayout? {
+        let started = PerfMeter.clock()
+        defer { PerfMeter.shared.layout(PerfMeter.clock() - started) }
         guard let d = displays.display(key) else { return nil }
         let wins = onScreenWindows().filter { isNormalWindow($0, on: d) }.prefix(8)
         let front = NSWorkspace.shared.frontmostApplication?.processIdentifier
@@ -172,18 +180,34 @@ extension Array {
         return ScreenLayout(display: key, bounds: d.bounds, regions: regions, focused: focused)
     }
 
-    /// Text areas covering at least 8% of the window: one per terminal session or editor split.
-    /// Cached for 5 s per window, or until it moves or resizes, since each read is IPC.
+    /// The panes of one window, cached for 10 s or until it moves or resizes, since each read is IPC.
     private func panes(of w: WindowInfo) -> [(frame: CGRect, element: AXUIElement)] {
-        if let c = paneCache[w.id], c.bounds == w.bounds, now() - c.at < 5 { return c.panes }
+        if let c = paneCache[w.id], c.bounds == w.bounds, now() - c.at < 10 { return c.panes }
         let app = AXUIElement.application(w.pid)
         guard let window = (app.raw(kAXWindowsAttribute).value as? [AXUIElement])?.first(where: { $0.windowID == w.id }) else { return [] }
         let minArea = w.bounds.width * w.bounds.height * 0.08
+        var found: [(frame: CGRect, element: AXUIElement)]
+        if let b = Self.bundle(w.pid), Self.electronApps.contains(b) {
+            if electronAsked.insert(w.pid).inserted {
+                AXUIElementSetAttributeValue(app, "AXManualAccessibility" as CFString, kCFBooleanTrue)
+            }
+            found = Self.editorGroups(in: window, minArea: minArea)
+        } else {
+            found = Self.textAreas(in: window, minArea: minArea)
+        }
+        // Reading order, so a pane keeps its index (and region id) between refreshes.
+        found.sort { ($0.frame.minY.rounded(), $0.frame.minX) < ($1.frame.minY.rounded(), $1.frame.minX) }
+        paneCache[w.id] = (w.bounds, now(), found)
+        return found
+    }
+
+    /// Terminals and native editors: one large text area per session or split.
+    // ponytail: breadth-first, at most 250 elements and 8 levels deep. Per-app known paths would
+    // be faster if an app's tree turns out deep.
+    static func textAreas(in root: AXUIElement, minArea: CGFloat) -> [(frame: CGRect, element: AXUIElement)] {
         var found: [(frame: CGRect, element: AXUIElement)] = []
-        var queue: [(element: AXUIElement, depth: Int)] = [(window, 0)]
+        var queue: [(element: AXUIElement, depth: Int)] = [(root, 0)]
         var next = 0
-        // ponytail: breadth-first, at most 250 elements and 8 levels deep; Electron editors have
-        // huge trees. Per-app known paths would be faster if an app needs it.
         while next < queue.count, next < 250 {
             let (el, depth) = queue[next]
             next += 1
@@ -193,19 +217,37 @@ extension Array {
             }
             if depth < 8 { queue += el.elements(kAXChildrenAttribute).map { ($0, depth + 1) } }
         }
-        // Reading order, so a pane keeps its index (and region id) between refreshes.
-        found.sort { ($0.frame.minY.rounded(), $0.frame.minX) < ($1.frame.minY.rounded(), $1.frame.minX) }
-        paneCache[w.id] = (w.bounds, now(), found)
         return found
     }
 
-    /// FR-P2-01, 02: raise the region's window if it isn't focused, then focus the pane through
-    /// AX. If the app ignores that, an opt-in click at the pane's centre does it (FR-P2-02).
+    /// VS Code and its forks: every editor group holds a `monaco-editor` element, visible through
+    /// Chromium's DOM class attribute. Workbench parts that can't hold editors (side bar, panel,
+    /// status bar, lists) are skipped so the walk stays short in these very large trees.
+    static func editorGroups(in root: AXUIElement, minArea: CGFloat) -> [(frame: CGRect, element: AXUIElement)] {
+        let skipParts: Set<String> = ["sidebar", "activitybar", "statusbar", "titlebar", "auxiliarybar", "panel", "banner"]
+        var found: [(frame: CGRect, element: AXUIElement)] = []
+        var queue: [(element: AXUIElement, depth: Int)] = [(root, 0)]
+        var next = 0
+        while next < queue.count, next < 600 {
+            let (el, depth) = queue[next]
+            next += 1
+            let classes = Set(el.raw("AXDOMClassList").value as? [String] ?? [])
+            if classes.contains("monaco-editor"), let f = el.frame, f.width * f.height >= minArea {
+                found.append((f, el))
+                continue
+            }
+            if classes.contains("part") && !classes.isDisjoint(with: skipParts) { continue }
+            if classes.contains("monaco-list") || classes.contains("minimap") { continue }
+            if depth < 40 { queue += el.elements(kAXChildrenAttribute).map { ($0, depth + 1) } }
+        }
+        return found
+    }
+
+    /// FR-P2-01, 02: raise the region's window if it isn't focused, then move focus to the pane.
     public func focus(region r: Region) -> FocusOutcome {
         let options = FocusOptions(.standard)
-        if let bundle = NSRunningApplication(processIdentifier: r.pid)?.bundleIdentifier, options.excludedApps.contains(bundle) {
-            return .skipped("excluded app")
-        }
+        let bundle = Self.bundle(r.pid) ?? "pid \(r.pid)"
+        if options.excludedApps.contains(bundle) { return .skipped("excluded app") }
         let app = AXUIElement.application(r.pid)
         let info = WindowInfo(id: r.windowID, pid: r.pid, layer: 0, bounds: r.frame, alpha: 1, owner: "")
         let front = NSWorkspace.shared.frontmostApplication?.processIdentifier
@@ -221,22 +263,58 @@ extension Array {
                 windows.remember(WindowRef(pid: r.pid, id: r.windowID, element: element, frame: element.frame ?? r.frame), on: key)
             }
         }
-        let centre = CGPoint(x: r.frame.midX, y: r.frame.midY)
+        var outcome = FocusOutcome.focusedWindow
         if r.isPane, let index = Int(r.id.split(separator: "p").last ?? ""), let pane = paneCache[r.windowID]?.panes[safe: index] {
-            AXUIElementSetAttributeValue(pane.element, kAXFocusedAttribute as CFString, kCFBooleanTrue)
-            usleep(40_000) // let the app move its focus before checking
-            let now = app.element(kAXFocusedUIElementAttribute)?.frame
-            if !(now.map { r.frame.contains(CGPoint(x: $0.midX, y: $0.midY)) } ?? false) {
-                guard options.paneClick else { return skip("app ignored pane focus (click fallback is off)", info) }
-                click(at: centre)
+            if !(windows.focused?.id == r.windowID) { usleep(60_000) } // a just-raised window needs a moment to take key focus
+            guard let method = focusPane(pane.element, region: r, app: app, options: options) else {
+                return skip("\(bundle) didn't move focus to the pane", info)
             }
+            outcome = .focusedPane(method)
         }
         if options.movePointer {
             let last = displays.display(containing: r.frame).flatMap { input.lastPointer(on: $0.key) }.flatMap { r.frame.contains($0) ? $0 : nil }
-            warp(to: last ?? centre)
+            warp(to: last ?? CGPoint(x: r.frame.midX, y: r.frame.midY))
         }
         onFocused?(r.frame)
-        return .focusedWindow
+        return outcome
+    }
+
+    /// Moves focus into a pane, and says how: first the plain Accessibility request; if the app
+    /// ignores it (iTerm2 does), the app's own "focus the pane to the left/right/above/below"
+    /// shortcut, aimed at the target; last, the opt-in click. Each step is checked against where
+    /// the app reports its focus, so a remapped shortcut or a refusal fails safely.
+    private func focusPane(_ pane: AXUIElement, region r: Region, app: AXUIElement, options: FocusOptions) -> String? {
+        func focusPoint() -> CGPoint? { app.element(kAXFocusedUIElementAttribute)?.frame.map { CGPoint(x: $0.midX, y: $0.midY) } }
+        func arrived() -> Bool { focusPoint().map { r.frame.contains($0) } ?? false }
+        if arrived() { return "already" }
+        if AXUIElementSetAttributeValue(pane, kAXFocusedAttribute as CFString, kCFBooleanTrue) == .success {
+            usleep(40_000)
+            if arrived() { return "accessibility" }
+        }
+        let target = CGPoint(x: r.frame.midX, y: r.frame.midY)
+        if let keys = PaneKeys(bundle: Self.bundle(r.pid)) {
+            for _ in 0..<3 { // up to three hops across a grid of panes
+                // Keystrokes go to this app's process only, and only while it is the one in front.
+                guard NSWorkspace.shared.frontmostApplication?.processIdentifier == r.pid, let from = focusPoint() else { break }
+                keys.move(toward: target, from: from, pid: r.pid)
+                usleep(90_000)
+                if arrived() { return "shortcut" }
+            }
+        }
+        if options.paneClick, Self.point(target, isInside: r.frame, of: r.pid) {
+            click(at: target)
+            return "click"
+        }
+        return nil
+    }
+
+    /// The click fallback fires only if the element under the point belongs to the target app and
+    /// lies inside the pane — never on whatever window happens to be on top there now.
+    static func point(_ p: CGPoint, isInside frame: CGRect, of pid: pid_t) -> Bool {
+        var element: AXUIElement?
+        guard AXUIElementCopyElementAtPosition(AXUIElementCreateSystemWide(), Float(p.x), Float(p.y), &element) == .success,
+              let element, element.pid == pid, let f = element.frame else { return false }
+        return frame.insetBy(dx: -2, dy: -2).contains(f)
     }
 
     /// The FR-P2-02 opt-in fallback: one left click. Our own events are ignored by the input
@@ -284,7 +362,13 @@ extension Array {
            let win = AXUIElement.application(pid).element(kAXFocusedWindowAttribute) {
             if let sub = win.string(kAXSubroleAttribute), sub == kAXDialogSubrole || sub == kAXSystemDialogSubrole { return "dialog" }
             if win.bool(kAXModalAttribute) == true { return "modal window" }
-            if win.elements(kAXChildrenAttribute).contains(where: { $0.string(kAXRoleAttribute) == kAXSheetRole }) { return "sheet" }
+        }
+        // A sheet holds the app's keyboard focus: ask the focused element for its top-level
+        // container instead of listing every child of the window (slow in big apps).
+        if let pid = front?.processIdentifier, pid != ownPID,
+           let top = AXUIElement.application(pid).element(kAXFocusedUIElementAttribute)?.element(kAXTopLevelUIElementAttribute),
+           top.string(kAXRoleAttribute) == kAXSheetRole {
+            return "sheet"
         }
         return nil
     }

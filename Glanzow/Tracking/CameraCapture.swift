@@ -107,9 +107,8 @@ public final class CameraCapture: NSObject, @unchecked Sendable {
         }
     }
 
-    /// FR-TRK-08 adaptive rate: 15 fps normally, 5 fps when the head has been still.
+    /// The camera's own rate. The tracker can analyse fewer of the frames (PoseTracker.setFrameRate).
     public func setFrameRate(_ fps: Int) {
-        tracker.setFrameRate(fps)
         queue.async {
             self.fps = fps
             self.applyFrameRate()
@@ -199,32 +198,39 @@ public final class CameraCapture: NSObject, @unchecked Sendable {
     }
 }
 
-/// FR-TRK-08: drop to 5 fps after 30 s with no head movement over 2°, back to 15 fps on movement.
+/// FR-TRK-08, extended: how many frames a second are worth analysing. 15 while the head moves,
+/// 8 once it has held still for 1.5 s (reading, typing), 5 after 30 s without movement (or with
+/// nobody there). A turn shows up within one steady frame (≤ 125 ms) and restores 15 at once.
 /// Movement is measured from an anchor pose, so a slow drift still counts once it adds up.
 public struct FrameRateGovernor: Sendable {
     public static let active = 15
+    public static let steady = 8
     public static let idle = 5
+    public var steadyAfter: TimeInterval = 1.5
+    public var idleAfter: TimeInterval = 30
     public private(set) var fps = active
     private var anchor: SIMD2<Double>?
     private var anchorTime: TimeInterval?
 
     public init() {}
 
-    /// The new frame rate when it should change, else nil. No face counts as no movement, so an
-    /// empty chair also drops to 5 fps.
+    /// The new rate when it should change, else nil.
     public mutating func update(_ e: PoseEvent) -> Int? {
         let t = e.timestamp
         if case .pose(let s) = e, anchor.map({ max(abs(s.yaw - $0.x), abs(s.pitch - $0.y)) > 2 }) ?? true {
             anchor = s.angles
             anchorTime = t
-            guard fps != Self.active else { return nil }
-            fps = Self.active
-            return fps
+            return set(Self.active)
         }
         let since = anchorTime ?? t
         anchorTime = since
-        guard fps == Self.active, t - since >= 30 else { return nil }
-        fps = Self.idle
-        return fps
+        let still = t - since
+        return set(still >= idleAfter ? Self.idle : still >= steadyAfter ? Self.steady : Self.active)
+    }
+
+    private mutating func set(_ rate: Int) -> Int? {
+        guard rate != fps else { return nil }
+        fps = rate
+        return rate
     }
 }

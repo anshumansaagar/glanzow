@@ -123,6 +123,7 @@ import os
     }
 
     fileprivate func notified(_ pid: pid_t) {
+        PerfMeter.shared.axEvent()
         // Only the frontmost app's focus is the user's focus; background apps shuffling their
         // own windows must not overwrite what the user last chose.
         guard pid == NSWorkspace.shared.frontmostApplication?.processIdentifier else { return }

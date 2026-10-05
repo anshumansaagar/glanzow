@@ -12,6 +12,20 @@ public enum Paths {
     public static var appSupport: URL {
         URL.applicationSupportDirectory.appending(path: "Glanzow", directoryHint: .isDirectory)
     }
+
+    /// Creates `url` readable by this user only (0700) if it doesn't exist. Never changes an
+    /// existing folder that might not be ours; `tightenAppSupport()` handles Glanzow's own.
+    public static func makePrivateDirectory(_ url: URL) throws {
+        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+    }
+
+    /// Glanzow's folder and its subfolders: this user only, including folders made by older builds.
+    public static func tightenAppSupport() {
+        let fm = FileManager.default
+        for url in [appSupport, appSupport.appending(path: "Recordings")] where fm.fileExists(atPath: url.path) {
+            try? fm.setAttributes([.posixPermissions: 0o700], ofItemAtPath: url.path)
+        }
+    }
 }
 
 /// UserDefaults keys for every setting in spec §3.9, plus the hidden debug pane (§6.2, §6.3).

@@ -87,6 +87,8 @@ import GlanzowKit
     private var lastSwitchAt = -Double.infinity
     private var snapshot: SwitchController.Snapshot?
     private var layoutPoke: AsyncStream<Void>.Continuation?
+    private var eyesNeeded = false
+    private var perfTimer: Timer?
     private var learning = LearningEngine()
     private var governor = FrameRateGovernor()
     private var saveScheduled = false
@@ -101,7 +103,10 @@ import GlanzowKit
         return ""
     }
 
-    init() { Pref.register() }
+    init() {
+        Pref.register()
+        Paths.tightenAppSupport()
+    }
 
     #if DEBUG
     func preview(displays list: [DisplayInfo]) { displays = list }
@@ -133,6 +138,8 @@ import GlanzowKit
         })
         wireCallbacks()
         startLayoutLoop()
+        startPerfReports()
+        startLockWatchdog()
         observeSystem()
         hotkey = Hotkey { [weak self] in self?.userPaused.toggle() }
         notifier.onExclude = { [weak self] bundle in self?.exclude(bundle) }
@@ -182,26 +189,49 @@ import GlanzowKit
     private func startLayoutLoop() {
         let (pokes, poke) = AsyncStream<Void>.makeStream(bufferingPolicy: .bufferingNewest(1))
         layoutPoke = poke
-        let controller = controller, focusManager = focusManager
-        tasks.append(Task.detached {
+        let controller = controller, focusManager = focusManager, store = store
+        tasks.append(Task.detached { [weak self] in
             for await _ in pokes {
                 let d = UserDefaults.standard
-                if d.bool(forKey: Pref.focusWithinScreen), let current = await controller.current {
-                    let layout = await focusManager.layout(for: current, panes: d.bool(forKey: Pref.focusPanes))
-                    await controller.update(layout: layout)
-                } else {
-                    await controller.update(layout: nil)
+                var layout: ScreenLayout?
+                // Only screens with a gaze map can focus within themselves; skip the AX work elsewhere.
+                if d.bool(forKey: Pref.focusWithinScreen), let current = await controller.current, store.model(current)?.gaze != nil {
+                    layout = await focusManager.layout(for: current, panes: d.bool(forKey: Pref.focusPanes))
                 }
+                await controller.update(layout: layout)
+                // Eye landmarks cost CPU; they only matter with two or more windows or panes to choose from.
+                let worthIt = (layout?.regions.count ?? 0) >= 2
+                await self?.setEyesNeeded(worthIt)
                 try? await Task.sleep(for: .milliseconds(250))
             }
         })
         tasks.append(Task { [weak self] in
             while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(1))
+                // Focus and window changes poke at once; this only catches windows moved silently.
+                try? await Task.sleep(for: .seconds(3))
                 guard let self else { return }
                 if self.switchingEnabled { self.layoutPoke?.yield(()) }
             }
         })
+    }
+
+    private func setEyesNeeded(_ needed: Bool) {
+        guard needed != eyesNeeded else { return }
+        eyesNeeded = needed
+        applySettings()
+    }
+
+    /// Once a minute while the camera runs: where the time goes (PerfMeter), into the switch log.
+    private func startPerfReports() {
+        perfTimer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                var fields = PerfMeter.shared.report()
+                guard case .running = self.cameraState else { return }
+                fields["eyes"] = self.eyesNeeded
+                self.eventLog.append("perf", fields)
+            }
+        }
     }
 
     /// Window tracking and the input tap need Accessibility; start them once it is granted.
@@ -275,9 +305,10 @@ import GlanzowKit
 
     /// Re-reads settings after any UserDefaults change; cheap and idempotent.
     private func applySettings() {
-        // FR-P2-01 needs eye offsets; landmarks run on every other frame to hold CPU near NFR-04.
+        // FR-P2-01 needs eye offsets, but only when there is more than one window or pane to pick
+        // from; landmarks are the costliest step. Every frame while calibrating, every other otherwise.
         tracker.configure(smoothing: SmoothingParams(defaults),
-                          trackPupils: defaults.bool(forKey: Pref.trackPupils) || defaults.bool(forKey: Pref.focusWithinScreen) || calibrating,
+                          trackPupils: defaults.bool(forKey: Pref.trackPupils) || calibrating || (eyesNeeded && defaults.bool(forKey: Pref.focusWithinScreen)),
                           pupilStride: calibrating ? 1 : 2)
         layoutPoke?.yield(())
         let tuning = Tuning(defaults)
@@ -312,8 +343,8 @@ import GlanzowKit
     private func handlePose(_ e: PoseEvent) {
         learning.observe(e)
         if let fps = governor.update(e) { // FR-TRK-08
-            log.info("frame rate \(fps) fps")
-            camera.setFrameRate(fps)
+            tracker.setFrameRate(fps)                                   // frames analysed
+            camera.setFrameRate(fps == FrameRateGovernor.idle ? 5 : 15) // frames captured
         }
         switch e {
         case .pose(let s):
@@ -425,6 +456,7 @@ import GlanzowKit
                                      "frameToFocusMs": Int((t - r.time) * 1000), "focusMs": Int(r.focusDuration * 1000)]
         switch r.outcome {
         case .focusedWindow: fields["outcome"] = "window"
+        case .focusedPane(let how): fields["outcome"] = "pane"; fields["method"] = how
         case .pointerOnly: fields["outcome"] = "pointer"
         case .skipped(let why): fields["outcome"] = "skipped"; fields["reason"] = why
         }
@@ -505,8 +537,36 @@ import GlanzowKit
     }
 
     private func setSystemPause(_ reason: String, _ on: Bool) {
-        log.info("system pause \(reason, privacy: .public) \(on)")
+        // Any process can post "screen unlocked" or "screensaver stopped" (they are distributed
+        // notifications), so a resume is accepted only if the system agrees it's true.
+        if !on, reason == "lock" || reason == "screensaver", Self.systemLockState().contains(reason) { return }
+        guard on != systemPauses.contains(reason) else { return }
+        eventLog.append("state", ["pause": reason, "on": on])
         if on { systemPauses.insert(reason) } else { systemPauses.remove(reason) }
+    }
+
+    /// What the system itself says right now: "lock" if the screen is locked, "screensaver" if it runs.
+    static func systemLockState() -> Set<String> {
+        var state = Set<String>()
+        if let session = CGSessionCopyCurrentDictionary() as? [String: Any], session["CGSSessionScreenIsLocked"] as? Bool == true {
+            state.insert("lock")
+        }
+        if !NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.ScreenSaver.Engine").isEmpty {
+            state.insert("screensaver")
+        }
+        return state
+    }
+
+    /// Every 30 s, reconcile lock and screensaver pauses with the real state, so a missed (or
+    /// faked) notification can neither leave the camera on while locked nor off after unlocking.
+    private func startLockWatchdog() {
+        Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                let actual = Self.systemLockState()
+                for reason in ["lock", "screensaver"] { self.setSystemPause(reason, actual.contains(reason)) }
+            }
+        }
     }
 
     static let callApps: Set<String> = ["us.zoom.xos", "com.microsoft.teams", "com.microsoft.teams2", "com.apple.FaceTime",
@@ -723,6 +783,9 @@ import GlanzowKit
             w.titleVisibility = .hidden
             w.isMovableByWindowBackground = true
             onboardingWindow = w
+            observers.append(NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification, object: w, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.onboardingWindow = nil } // free its views (NFR-05)
+            })
         }
         Self.present(onboardingWindow!)
     }
@@ -735,7 +798,11 @@ import GlanzowKit
         if settingsWindow == nil || debug != settingsShowsDebug {
             settingsWindow?.close()
             settingsShowsDebug = debug
-            settingsWindow = Self.window("Glanzow Settings", SettingsView(model: self, showDebug: debug))
+            let w = Self.window("Glanzow Settings", SettingsView(model: self, showDebug: debug))
+            settingsWindow = w
+            observers.append(NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification, object: w, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.settingsWindow = nil }
+            })
         }
         Self.present(settingsWindow!)
     }

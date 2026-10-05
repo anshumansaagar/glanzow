@@ -87,3 +87,33 @@ final class CalibrationMathTests: XCTestCase {
         XCTAssertTrue(pb.allSatisfy { b.bounds.contains($0) })
     }
 }
+
+/// Security: a calibration file is outside the app's control, so loading must never trust it.
+final class CalibrationFileSafetyTests: XCTestCase {
+    private func model(gaze: GazeMap? = nil, mean: SIMD2<Double> = SIMD2(0, 0), xx: Double = 9) -> DisplayModel {
+        DisplayModel(key: "k", name: "A", mean: mean, covariance: Cov2(xx: xx, xy: 0, yy: 9), meanFaceScale: 0.2,
+                     cameraID: "c", sampleCount: 20, gaze: gaze)
+    }
+
+    func test_malformedNumbersRejectTheModel() {
+        XCTAssertNil(CalibrationStore.sanitized(model(mean: SIMD2(.nan, 0))))
+        XCTAssertNil(CalibrationStore.sanitized(model(xx: -4)))
+        XCTAssertNil(CalibrationStore.sanitized(model(mean: SIMD2(1e9, 0))))
+        XCTAssertNotNil(CalibrationStore.sanitized(model()))
+    }
+
+    func test_misshapenGazeMapIsDroppedButModelKept() throws {
+        let bad = GazeMap(head: [[0.5, 0.1]], eyes: nil, headError: 0.1, eyesError: nil) // one short row
+        let kept = try XCTUnwrap(CalibrationStore.sanitized(model(gaze: bad)))
+        XCTAssertNil(kept.gaze)
+        let good = GazeMap(head: [[0.5, 0.1, 0], [0.5, 0, 0.1]], eyes: nil, headError: 0.1, eyesError: nil)
+        XCTAssertNotNil(CalibrationStore.sanitized(model(gaze: good))?.gaze)
+    }
+
+    func test_garbageFileLoadsAsUncalibratedWithoutCrashing() throws {
+        let url = FileManager.default.temporaryDirectory.appending(path: "bad-\(UUID()).json")
+        defer { try? FileManager.default.removeItem(at: url) }
+        try Data(#"{"version":1,"models":[{"key":"k","name":"A","mean":[0],"covariance":{}}]}"#.utf8).write(to: url)
+        XCTAssertTrue(CalibrationStore(url: url).all.isEmpty)
+    }
+}

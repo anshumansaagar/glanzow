@@ -117,7 +117,11 @@ public final class PoseTracker: NSObject, PoseSource, AVCaptureVideoDataOutputSa
         }
         frameIndex += 1
         let measurePupils = cfg.trackPupils && frameIndex % cfg.pupilStride == 0
-        var raw = detect(pixels, at: t, pupils: measurePupils, minConfidence: cfg.minConfidence)
+        let wall = PerfMeter.clock(), thread = PerfMeter.threadClock()
+        let (detected, eyeNs) = detect(pixels, at: t, pupils: measurePupils, minConfidence: cfg.minConfidence)
+        var raw = detected
+        let found: Bool = { if case .pose = detected { return true }; return false }()
+        PerfMeter.shared.frame(face: found, visionWall: PerfMeter.clock() - wall, visionThread: PerfMeter.threadClock() - thread, eyeWall: eyeNs)
         if case .pose(var s) = raw, cfg.trackPupils {
             // ponytail: half-rate landmarks (NFR-04 CPU); the in-between frame reuses a reading
             // under 0.25 s old. Every frame if within-screen focus ever needs it faster.
@@ -137,12 +141,13 @@ public final class PoseTracker: NSObject, PoseSource, AVCaptureVideoDataOutputSa
         return now() - ((0...0.5).contains(age) ? age : 0)
     }
 
-    private func detect(_ pixels: CVPixelBuffer, at t: TimeInterval, pupils: Bool, minConfidence: Double) -> PoseEvent {
+    /// The event, plus how long the eye landmarks took when they ran (for PerfMeter).
+    private func detect(_ pixels: CVPixelBuffer, at t: TimeInterval, pupils: Bool, minConfidence: Double) -> (PoseEvent, UInt64?) {
         guard (try? handler.perform([faceRequest], on: pixels, orientation: .up)) != nil,
               let face = pick(faceRequest.results ?? []),
               let yaw = face.yaw?.doubleValue, let pitch = face.pitch?.doubleValue, let roll = face.roll?.doubleValue,
               Double(face.confidence) >= minConfidence // §7: glasses, poor light, backlight → no face
-        else { return .noFace(t) }
+        else { return (.noFace(t), nil) }
         let deg = 180 / Double.pi
         // SPEC: §7 asks for "roll-compensated yaw; if roll > 30°, ignore sample". Only the 30° gate
         // is applied. Whether tilt leaks into Vision's yaw and pitch depends on the order it
@@ -150,11 +155,13 @@ public final class PoseTracker: NSObject, PoseSource, AVCaptureVideoDataOutputSa
         // error rather than remove it. Measure first: record one session facing a single screen
         // with the head tilted, replay it, and add the rotation only if yaw/pitch drift with roll.
         // An ignored sample counts as no face, so a long tilt reads as "No face" and nothing switches.
-        guard abs(roll * deg) <= 30 else { return .noFace(t) }
+        guard abs(roll * deg) <= 30 else { return (.noFace(t), nil) }
         var sample = PoseSample(timestamp: t, yaw: yaw * deg, pitch: pitch * deg, roll: roll * deg,
                                 faceScale: Double(face.boundingBox.width), confidence: Double(face.confidence))
-        if pupils { sample.pupilOffset = pupilOffset(face, pixels) }
-        return .pose(sample)
+        guard pupils else { return (.pose(sample), nil) }
+        let start = PerfMeter.clock()
+        sample.pupilOffset = pupilOffset(face, pixels)
+        return (.pose(sample), PerfMeter.clock() - start)
     }
 
     /// §2, §7: with several faces, follow the largest, preferring the one nearest the last tracked face.
