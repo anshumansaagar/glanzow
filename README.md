@@ -1,9 +1,9 @@
 # Glanzow
 
-Glanzow is a Mac menu bar app. It uses the Mac's camera to see which screen you are facing,
-and moves keyboard focus to that screen before you start typing. Look at your other monitor
-for a moment and the window you last used there comes to the front. It waits while you type or
-use the mouse, so it never steals keystrokes mid-sentence.
+Glanzow is a Mac menu bar app. It uses the Mac's camera to see where you're looking, and moves
+keyboard focus there before you start typing: to the screen you face, and within it to the
+window or split pane your eyes rest on. It waits while you type or use the mouse, so it never
+steals keystrokes mid-sentence.
 
 Everything runs on the Mac. Camera frames are processed in memory and dropped; nothing is saved
 to disk and the app makes no network calls at all.
@@ -11,6 +11,27 @@ to disk and the app makes no network calls at all.
 The full requirements are in `requirements.pdf`. Code comments cite its requirement IDs
 (`FR-FOC-01`, `NFR-04`, …), and every place where the spec was ambiguous carries a `// SPEC:`
 comment explaining the choice.
+
+## Using it
+
+Click the gleam ✦ in the menu bar for the panel: a live view of your screens with the gleam
+where you're looking, a Hold switch, and four quick toggles. Right-click it for the menu.
+
+| Shortcut | What it does |
+|---|---|
+| ⌃⌥H | Hold focus where it is / follow me again |
+| ⌃⌥Z | Undo the last switch (and teach Glanzow to be a little more patient) |
+
+Both can be changed in Settings › Shortcuts.
+
+| Feature | Default | What it does |
+|---|---|---|
+| Screens | on | Focus moves to the screen you settle on (Settle time, learned from your undos and quick returns, 250–600 ms) |
+| Windows & panes | on | Within a screen, focus moves to the window or split pane your eyes rest on for about half a second. Panes in iTerm2, Terminal, VS Code, Cursor, Zed, Xcode, Ghostty, WezTerm and JetBrains IDEs; whole windows everywhere else |
+| Pointer follows eyes | off | When you reach for the mouse, the pointer jumps to where you're looking |
+| Eye breaks | off | Every 20 minutes of screen time, a nudge to look far away; it completes once you have |
+| Privacy guard | off | Someone else watching your screen for 2 s frosts it over until they look away |
+| Camera rest | on | Two minutes without you in view or at the keyboard turns the camera off until you're back |
 
 ## Requirements
 
@@ -124,32 +145,40 @@ The switch log and recordings hold numbers and display IDs only — never images
 ## How it works
 
 ```
-camera frames ──▶ PoseTracker ──▶ smoothed head pose ──▶ SwitchController ──▶ FocusManager
- (CameraCapture)   (Vision, One Euro)                    (dwell, guards)      (raise, warp)
-                                    ▲                          ▲     ▲
-                         DisplayClassifier          InputMonitor   WindowTracker
-                         (calibrated models)        (typing/mouse) (last window per display)
+camera ─▶ face pose (Vision) ─▶ iris centres ─▶ smoothing ─▶ which screen ─▶ where on it ─▶ focus
+          yaw, pitch, roll     (gradients)      (One Euro)   (clusters)       (gaze map +      (raise,
+                                                                              fixation)        warp)
 ```
 
-1. **Calibration** records where your head points for each display while you follow a dot.
-   Each display becomes a cluster of (yaw, pitch) angles.
-2. **Classification** picks the nearest cluster for every frame (Mahalanobis distance). A pose
-   far from every cluster is "off-screen" (phone, desk) and does nothing. Switching away from the
-   current display needs a clear margin (the *Head turn needed* setting).
-3. **Switching** happens only after the same display wins for the *Delay before switching* (300
-   ms), and not while you type (3 s, unless you hold the turn for 1 s), use the mouse (1.5 s), have
-   a menu, dialog, password field, screenshot tool or Mission Control open, or an excluded app is
-   in front.
-4. **Focus** goes to the window you last used on that display, else its frontmost window. The
-   pointer follows, and a gold border flashes around the window.
-5. **Within a screen** (Phase 2), calibration also fits a map from head angle plus eye position
-   to a point on each screen. Look at another window, or another split pane in a terminal or
-   editor, for 450 ms and focus moves there. It never moves while you type, and it waits until
-   your gaze is clearly inside the new window rather than near a border. Browsers, chat and
-   documents switch whole windows only. Panes are focused through Accessibility; for apps that
-   ignore that, an opt-in setting clicks the pane's centre instead.
-6. **Learning**: each click nudges that display's calibration a little. If the clicks keep
-   disagreeing with what Glanzow thought, it suggests recalibrating.
+Each step is a published, widely used method rather than an invention:
+
+| Step | Method |
+|---|---|
+| Head pose | Apple Vision face rectangles, revision 3 |
+| Iris centre | Gradient-based eye-centre localisation (Timm & Barth, VISAPP 2011), on a small patch between the eye corners; glints from glasses are ignored by construction |
+| Smoothing | One Euro filter (Casiez, Roussel & Vogel, CHI 2012) |
+| Which screen | Nearest cluster by Mahalanobis distance, with a hysteresis margin and a dwell before switching |
+| Where on the screen | A ridge-regularised linear map from head and eye angles to screen position, fitted during calibration and refitted from your clicks as you work (WebGazer, Papoutsaki et al., IJCAI 2016) |
+| Window or pane choice | Dispersion-threshold fixation detection, I-DT (Salvucci & Goldberg, ETRA 2000) |
+| Calibration | Smooth-pursuit calibration (Pfeuffer et al., UIST 2013): follow a gleam around each screen |
+| Pointer follows eyes | MAGIC pointing (Zhai, Morimoto & Ihde, CHI 1999) |
+
+1. **Calibration** ("Teach my screens") has you follow a gleam that glides once around each
+   screen. Every frame becomes a training pair: where your head and eyes pointed, and where the
+   gleam was.
+2. **Which screen**: each frame is matched to the nearest screen's cluster. A pose far from every
+   screen (phone, desk) does nothing. A new screen must win for the settle time.
+3. **Where on the screen**: the gaze map turns head and eye angles into a point. When your eyes
+   rest (a fixation of about half a second) clearly inside another window or pane, focus moves
+   there. Panes are focused through Accessibility, or with the app's own pane shortcut when it
+   ignores that (iTerm2: ⌥⌘arrow; VS Code: ⌘K ⌘arrow), always checked afterwards.
+4. **Never interrupting**: nothing moves while you type (screens allow a deliberate one-second
+   look to override; windows and panes never do), use the mouse, or have a menu, dialog, sheet,
+   password field, screenshot tool or Mission Control open, or while an excluded app is in front.
+5. **Feedback**: a brief spotlight dims everything around the newly focused window. It is clear
+   for your first 50 switches and lighter after that.
+6. **Learning**: clicks refine the gaze map and the screen clusters; undos and quick returns
+   tune the settle time.
 
 ### Project layout
 
@@ -169,25 +198,36 @@ ReplayCLI/      replays recorded pose JSON through the pipeline with a logging F
 Everything except `App/` builds into the `GlanzowKit` library, so the tests and `ReplayCLI`
 use exactly the code the app runs.
 
+## Security and privacy
+
+- No network code and no third-party libraries. `make verify` (run after every release build)
+  checks the camera is the only entitlement, the hardened runtime is on (no debugger attach, no
+  library injection), no debug-only code is present, and only Apple system libraries are linked.
+- Frames never leave memory. Stored data is numbers only, in `~/Library/Application Support/Glanzow`
+  (folder 0700, files 0600). Settings › Privacy can erase all of it.
+- Keystrokes: a listen-only event tap records *when* keys are pressed, never which.
+- Lock and screensaver state is verified with the system before the camera resumes (the
+  notifications themselves can be faked by any process), with a 30-second watchdog.
+- The calibration file is validated on load; malformed numbers or shapes are discarded, not trusted.
+- Pane shortcuts are delivered only to the target app's process, only while it is frontmost, and
+  only when you aren't typing; the opt-in click fallback first checks the point really is inside
+  the target pane.
+
+## Measuring it
+
+`make diagnostics` writes one text file to the Desktop: settings, calibration quality per screen
+(including "window aim"), switch timings (median and 90th percentile), undo counts, a 60-second
+CPU and memory sample, and recent log lines. Numbers only. Glanzow also logs a `perf` line every
+minute: process CPU, frames analysed, time per frame in face and eye analysis, and memory.
+
 ## Known limits
 
-- Window and pane focus within a screen needs a calibration made with this version, and works
-  best for side-by-side windows and panes. Stacked panes depend on eye position, which a webcam
-  measures roughly; narrow panes (three or more across) will misfire. The calibration result
-  reports the "window aim" error as a share of the screen.
-- Pane detection looks for large text areas in the app's Accessibility tree. It is written for
-  iTerm2, Terminal, VS Code, Xcode and similar apps, but no app's tree could be inspected while
-  building it; check the debug overlay's "region" line in each app you use.
-- Eye tracking runs on every other frame, about 2.9 ms of CPU per frame on an M3 Pro (≈4.3% of a
-  core at 15 fps). Turning off *Focus the window I'm looking at* turns it off.
-- The last window is remembered per display, not per Space; a window on a hidden Space falls
-  back to the frontmost visible one.
-- Mission Control is detected from the Dock's own open/close notifications. If Glanzow ever
-  refuses to switch, the debug overlay's "blocked by" line names the reason.
-- Head tilt is not corrected, only filtered (samples tilted over 30° are ignored); see the
-  `// SPEC:` note in `PoseTracker.swift` for the one recording that would settle it.
-- Pupil tracking exists but is off by default and unused by the V1 screen choice.
+- Webcam eye tracking is region-level, not pixel-level: expect roughly 5–10% of the screen width.
+  Side-by-side windows and panes work best; stacked or narrow ones are harder.
+- VS Code pane discovery relies on Electron's accessibility tree; it couldn't be inspected while
+  building, so check the debug overlay's "region" line.
+- Head tilt is filtered (samples tilted over 30° are ignored), not corrected.
 - Call-app detection covers Zoom, Teams, FaceTime, Webex and Skype; browser calls and screen
-  sharing need adding to Excluded Apps by hand.
-- The performance, accuracy and false-switch targets (NFR-01 to NFR-06) need measuring on real
-  hardware with the camera running; see the event log above.
+  sharing need adding to "Leave these apps alone" by hand.
+- Releasing publicly needs a Developer ID certificate (paid Apple Developer Program) for
+  notarization. Also check that the name "Glanzow" is free to use.
