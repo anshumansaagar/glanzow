@@ -28,7 +28,6 @@ Both can be changed in Settings › Shortcuts.
 |---|---|---|
 | Screens | on | Focus moves to the screen you settle on (Settle time, learned from your undos and quick returns, 250–600 ms) |
 | Windows & panes | on | Within a screen, focus moves to the window or split pane your eyes rest on for about half a second. Panes in iTerm2, Terminal, VS Code, Cursor, Zed, Xcode, Ghostty, WezTerm and JetBrains IDEs; whole windows everywhere else |
-| Pointer follows eyes | off | When you reach for the mouse, the pointer jumps to where you're looking |
 | Eye breaks | off | Every 20 minutes of screen time, a nudge to look far away; it completes once you have |
 | Privacy guard | off | Someone else watching your screen for 2 s frosts it over until they look away |
 | Camera rest | on | Two minutes without you in view or at the keyboard turns the camera off until you're back |
@@ -161,7 +160,6 @@ Each step is a published, widely used method rather than an invention:
 | Where on the screen | A ridge-regularised linear map from head and eye angles to screen position, fitted during calibration and refitted from your clicks as you work (WebGazer, Papoutsaki et al., IJCAI 2016) |
 | Window or pane choice | Dispersion-threshold fixation detection, I-DT (Salvucci & Goldberg, ETRA 2000) |
 | Calibration | Smooth-pursuit calibration (Pfeuffer et al., UIST 2013): follow a gleam around each screen; then nine fixed points, the classic grid, looked at eyes-first as in real use |
-| Pointer follows eyes | MAGIC pointing (Zhai, Morimoto & Ihde, CHI 1999) |
 
 1. **Calibration** ("Teach my screens") has you follow a gleam that glides once around each
    screen, then look at nine spots it jumps between. Every frame becomes a training pair: where

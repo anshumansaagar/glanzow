@@ -63,28 +63,4 @@ final class EyeFeatureTests: XCTestCase {
         _ = g.update(at: 20, watchers: 1)
         XCTAssertTrue(g.update(at: 22, watchers: 1), "a new watcher veils again")
     }
-
-    // MARK: Pointer follows eyes
-
-    private let left = DisplayInfo(id: 1, key: "L", name: "L", bounds: CGRect(x: 0, y: 0, width: 1920, height: 1080), isBuiltin: false)
-    private let right = DisplayInfo(id: 2, key: "R", name: "R", bounds: CGRect(x: 1920, y: 0, width: 1920, height: 1080), isBuiltin: false)
-
-    func test_pointerJumpsToTheGazeWhenFarAndStaysWhenNear() {
-        let far = MagicPointer.target(pointer: CGPoint(x: 100, y: 100), gaze: CGPoint(x: 1500, y: 800), faced: left, pointerDisplay: left, lastOnFaced: nil)
-        XCTAssertEqual(far, CGPoint(x: 1500, y: 800))
-        let near = MagicPointer.target(pointer: CGPoint(x: 1400, y: 760), gaze: CGPoint(x: 1500, y: 800), faced: left, pointerDisplay: left, lastOnFaced: nil)
-        XCTAssertNil(near)
-    }
-
-    func test_aGazePointPastTheEdgeStillJumpsJustInsideTheFacedScreen() {
-        let t = MagicPointer.target(pointer: CGPoint(x: 100, y: 100), gaze: CGPoint(x: 1990, y: 1130), faced: left, pointerDisplay: left, lastOnFaced: nil)
-        XCTAssertEqual(t, CGPoint(x: 1900, y: 1060))
-    }
-
-    func test_pointerCrossesToTheFacedScreenWithoutAGazePoint() {
-        let t = MagicPointer.target(pointer: CGPoint(x: 100, y: 100), gaze: nil, faced: right, pointerDisplay: left, lastOnFaced: CGPoint(x: 2500, y: 300))
-        XCTAssertEqual(t, CGPoint(x: 2500, y: 300))
-        XCTAssertNil(MagicPointer.target(pointer: CGPoint(x: 100, y: 100), gaze: nil, faced: left, pointerDisplay: left, lastOnFaced: nil))
-        XCTAssertNil(MagicPointer.target(pointer: CGPoint(x: 100, y: 100), gaze: nil, faced: nil, pointerDisplay: left, lastOnFaced: nil))
-    }
 }

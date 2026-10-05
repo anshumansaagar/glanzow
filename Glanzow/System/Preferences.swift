@@ -46,7 +46,6 @@ public enum Pref {
     public static let undoHotkeyCode = "undoHotkeyCode"
     public static let undoHotkeyModifiers = "undoHotkeyModifiers"
     public static let undoHotkeyLabel = "undoHotkeyLabel"
-    public static let magicPointer = "magicPointer"     // the pointer jumps to where you look when you reach for the mouse
     public static let eyeBreaks = "eyeBreaks"           // 20-20-20 reminders, finished by looking away
     public static let privacyGuard = "privacyGuard"     // veil the screens when someone else watches
     public static let feedbackStyle = "feedbackStyle"   // spotlight, ring, none
@@ -90,7 +89,6 @@ public enum Pref {
         undoHotkeyCode: 6,            // kVK_ANSI_Z
         undoHotkeyModifiers: 6144,
         undoHotkeyLabel: "⌃⌥Z",
-        magicPointer: false,
         eyeBreaks: false,
         privacyGuard: false,
         feedbackStyle: "spotlight",

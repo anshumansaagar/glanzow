@@ -140,7 +140,6 @@ import GlanzowKit
     private let eyePill = EyeBreakPill()
     private var privacy = PrivacyGuard()
     private let veil = PrivacyVeil()
-    private var lastPointerJump = -Double.infinity
     private var clicksSinceRefit: [DisplayKey: Int] = [:]
     private var governor = FrameRateGovernor()
     private var saveScheduled = false
@@ -248,12 +247,11 @@ import GlanzowKit
                 self.veil.hide()
             }
         }
-        input.onMoveStart = { [weak self] p, t in self?.reachedForMouse(p, at: t) }
         eyePill.onLater = { [weak self] in
             self?.eyeBreak.snooze()
             self?.eyePill.hide()
         }
-        // A warp otherwise mutes the mouse for 0.25 s, which would make every jump feel sticky.
+        // A warp (the pointer coming along with a switch) otherwise mutes the mouse for 0.25 s.
         CGEventSource(stateID: .combinedSessionState)?.localEventsSuppressionInterval = 0
     }
 
@@ -381,10 +379,8 @@ import GlanzowKit
     private func applySettings() {
         // FR-P2-01 needs eye offsets, but only when there is more than one window or pane to pick
         // from; landmarks are the costliest step. Every frame while calibrating, every other otherwise.
-        // Pointer-follow needs them all the time: the pointer can jump anywhere on any screen.
         tracker.configure(smoothing: SmoothingParams(defaults),
-                          trackPupils: defaults.bool(forKey: Pref.trackPupils) || calibrating || defaults.bool(forKey: Pref.magicPointer)
-                              || (eyesNeeded && defaults.bool(forKey: Pref.focusWithinScreen)),
+                          trackPupils: defaults.bool(forKey: Pref.trackPupils) || calibrating || (eyesNeeded && defaults.bool(forKey: Pref.focusWithinScreen)),
                           pupilStride: calibrating ? 1 : 2)
         layoutPoke?.yield(())
         let tuning = Tuning(defaults)
@@ -595,33 +591,6 @@ import GlanzowKit
             }
         } else if veil.isShown {
             veil.hide()
-        }
-    }
-
-    /// Pointer follows your eyes (MAGIC pointing): as the hand reaches for a resting mouse, the
-    /// pointer jumps near the gaze; the hand does the last bit. At most once every 1.5 s.
-    private func reachedForMouse(_ p: CGPoint, at t: TimeInterval) {
-        guard defaults.bool(forKey: Pref.magicPointer), switchingEnabled, faceVisible, t - lastPointerJump > 1.5 else { return }
-        Task {
-            let snap = await controller.snapshot()
-            var faced: DisplayKey?
-            if case .candidate(let k)? = snap.classification { faced = k }
-            if case .stay? = snap.classification { faced = snap.current }
-            guard let key = faced, let d = registry.display(key) else { return }
-            // From the latest frame and the faced screen's own gaze map, so it works on any
-            // screen, with one window or many (the switcher's gaze point exists only for regions).
-            let gaze = lastSample.flatMap { s -> CGPoint? in
-                guard t - s.timestamp < 0.5, let g = classifier.gazePoint(s, on: key) else { return nil }
-                return CGPoint(x: d.bounds.minX + g.x * d.bounds.width, y: d.bounds.minY + g.y * d.bounds.height)
-            }
-            guard let target = MagicPointer.target(pointer: p, gaze: gaze, faced: d, pointerDisplay: registry.display(at: p),
-                                                   lastOnFaced: input.lastPointer(on: key))
-            else { return }
-            lastPointerJump = t
-            input.noteWarp(to: target)
-            CGWarpMouseCursorPosition(target)
-            CGAssociateMouseAndMouseCursorPosition(1)
-            eventLog.append("pointer", ["display": key, "jumpPx": Int(hypot(target.x - p.x, target.y - p.y))])
         }
     }
 

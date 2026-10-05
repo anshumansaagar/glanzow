@@ -6,7 +6,6 @@ import GlanzowKit
 struct GlancePanel: View {
     @ObservedObject var model: AppModel
     @AppStorage(Pref.focusWithinScreen) private var windows = true
-    @AppStorage(Pref.magicPointer) private var pointer = false
     @AppStorage(Pref.eyeBreaks) private var breaks = false
     @AppStorage(Pref.privacyGuard) private var privacy = false
     @AppStorage(Pref.hotkeyLabel) private var holdKey = "⌃⌥H"
@@ -28,9 +27,8 @@ struct GlancePanel: View {
 
             HoldSwitch(holding: model.userPaused, shortcut: holdKey) { model.userPaused.toggle() }
 
-            LazyVGrid(columns: [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8)], spacing: 8) {
+            HStack(spacing: 8) {
                 FeatureTile(title: "Windows & panes", symbol: "rectangle.split.2x1", isOn: $windows)
-                FeatureTile(title: "Pointer follows eyes", symbol: "cursorarrow.rays", isOn: $pointer)
                 FeatureTile(title: "Eye breaks", symbol: "leaf", isOn: $breaks)
                 FeatureTile(title: "Privacy guard", symbol: "shield.lefthalf.filled", isOn: $privacy)
             }
@@ -119,16 +117,16 @@ private struct FeatureTile: View {
 
     var body: some View {
         Button { isOn.toggle() } label: {
-            HStack(spacing: 8) {
+            VStack(alignment: .leading, spacing: 6) {
                 Image(systemName: symbol)
-                    .font(.system(size: 13, weight: .medium))
+                    .font(.system(size: 14, weight: .medium))
                     .foregroundStyle(isOn ? Color.accentColor : Color.secondary)
-                    .frame(width: 18)
-                Text(title).font(.system(size: 12, weight: .medium)).lineLimit(2).multilineTextAlignment(.leading)
-                Spacer(minLength: 0)
+                    .frame(height: 16)
+                Text(title).font(.system(size: 11.5, weight: .medium)).lineLimit(2).multilineTextAlignment(.leading)
+                    .fixedSize(horizontal: false, vertical: true)
             }
-            .padding(.horizontal, 10)
-            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+            .padding(10)
+            .frame(maxWidth: .infinity, minHeight: 62, alignment: .topLeading)
             .contentShape(Rectangle())
             .background(RoundedRectangle(cornerRadius: 10, style: .continuous)
                 .fill(isOn ? Color.accentColor.opacity(0.14) : Color.primary.opacity(0.05)))

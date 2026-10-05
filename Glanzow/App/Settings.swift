@@ -195,17 +195,11 @@ struct WindowsSettings: View {
 // MARK: Eyes
 
 struct EyesSettings: View {
-    @AppStorage(Pref.magicPointer) private var pointer = false
     @AppStorage(Pref.eyeBreaks) private var breaks = false
     @AppStorage(Pref.privacyGuard) private var privacy = false
 
     var body: some View {
         Form {
-            Section {
-                Toggle("Pointer follows your eyes", isOn: $pointer)
-            } footer: {
-                Footnote("When you reach for the mouse, the pointer jumps to where you're looking, so you only fine-tune the last bit. It never moves while the mouse is still.")
-            }
             Section {
                 Toggle("Eye breaks", isOn: $breaks)
             } footer: {
