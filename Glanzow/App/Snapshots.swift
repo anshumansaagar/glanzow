@@ -15,15 +15,38 @@ import GlanzowKit
             DisplayInfo(id: 2, key: "r", name: "Right", bounds: CGRect(x: 0, y: -1080, width: 1920, height: 1080), isBuiltin: false),
             DisplayInfo(id: 3, key: "m", name: "MacBook", bounds: CGRect(x: -864, y: 0, width: 1728, height: 1117), isBuiltin: true),
         ])
-        for step in 0..<4 {
-            for dark in [false, true] {
-                let host = NSHostingView(rootView: OnboardingView(model: model, step: step))
-                host.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
-                save(host, size: CGSize(width: 620, height: 490), dir.appending(path: "onboarding-\(step + 1)-\(dark ? "dark" : "light").png"))
-            }
+        for dark in [false, true] {
+            let host = NSHostingView(rootView: OnboardingView(model: model))
+            host.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
+            save(host, size: CGSize(width: 620, height: 560), dir.appending(path: "onboarding-\(dark ? "dark" : "light").png"))
         }
-        let settings = NSHostingView(rootView: SettingsView(model: model, showDebug: false))
-        save(settings, size: CGSize(width: 520, height: 560), dir.appending(path: "settings.png"))
+        // A split view won't draw off-screen, so each settings page is rendered on its own.
+        let pages: [(String, AnyView)] = [
+            ("following", AnyView(FollowingSettings(model: model))), ("windows", AnyView(WindowsSettings())),
+            ("eyes", AnyView(EyesSettings())), ("feel", AnyView(FeelSettings())), ("screens", AnyView(ScreensSettings(model: model))),
+            ("shortcuts", AnyView(ShortcutSettings())), ("privacy", AnyView(PrivacySettings(model: model))),
+        ]
+        for (name, page) in pages {
+            save(NSHostingView(rootView: page), size: CGSize(width: 570, height: 560), dir.appending(path: "settings-\(name).png"))
+        }
+        model.previewLive()
+        for dark in [false, true] {
+            // The popover supplies the backdrop in the app; recreate it for the render.
+            let backdrop = NSVisualEffectView()
+            backdrop.material = .popover
+            backdrop.state = .active
+            backdrop.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
+            let panel = NSHostingView(rootView: GlancePanel(model: model))
+            let size = panel.fittingSize
+            panel.frame = CGRect(origin: .zero, size: size)
+            backdrop.addSubview(panel)
+            save(backdrop, size: size, dir.appending(path: dark ? "panel-dark.png" : "panel.png"))
+        }
+        for (name, style) in [("following", Glyph.Style.following), ("holding", .holding), ("faint", .faint), ("attention", .attention), ("learning", .learning)] {
+            let icon = NSImageView(image: Glyph.image(style, description: name))
+            icon.imageScaling = .scaleProportionallyUpOrDown
+            save(icon, size: CGSize(width: 72, height: 72), dir.appending(path: "glyph-\(name).png"))
+        }
         save(FocusFeedback.preview(), size: CGSize(width: 900, height: 360), dir.appending(path: "flash.png"))
         let calibration = CalibrationOverlay.preview(size: CGSize(width: 1440, height: 900))
         save(calibration, size: CGSize(width: 1440, height: 900), dir.appending(path: "calibration.png"))

@@ -117,3 +117,40 @@ final class CalibrationFileSafetyTests: XCTestCase {
         XCTAssertTrue(CalibrationStore(url: url).all.isEmpty)
     }
 }
+
+/// Trace-the-gleam calibration (smooth pursuit).
+final class PursuitTests: XCTestCase {
+    private let a = DisplayInfo(id: 1, key: "a", name: "A", bounds: CGRect(x: 0, y: 0, width: 1920, height: 1080), isBuiltin: false)
+    private let b = DisplayInfo(id: 2, key: "b", name: "B", bounds: CGRect(x: 1920, y: 0, width: 1920, height: 1080), isBuiltin: false)
+
+    func test_FR_CAL_01_tourPassesEveryCornerAndSharedEdgeAndCrossesTheMiddle() {
+        let path = CalibrationOverlay.pursuitPath(for: a, among: [a, b])
+        for corner in [CGPoint(x: 60, y: 60), CGPoint(x: 1860, y: 60), CGPoint(x: 1860, y: 1020), CGPoint(x: 60, y: 1020)] {
+            XCTAssertTrue(path.contains(corner), "missing corner \(corner)")
+        }
+        // Two points on the shared right edge, besides the middle crossing at y 540.
+        XCTAssertEqual(path.filter { $0.x == 1860 && $0.y > 60 && $0.y < 1020 && $0.y != 540 }.count, 2)
+        XCTAssertTrue(path.contains(CGPoint(x: 60, y: 540)) && path.contains(CGPoint(x: 1860, y: 540)), "crosses the middle")
+    }
+
+    func test_polylineWalksByDistanceAndFindsCorners() {
+        let line = Polyline([CGPoint(x: 0, y: 0), CGPoint(x: 100, y: 0), CGPoint(x: 100, y: 50)])
+        XCTAssertEqual(line.length, 150)
+        XCTAssertEqual(line.position(at: 50), CGPoint(x: 50, y: 0))
+        XCTAssertEqual(line.position(at: 125), CGPoint(x: 100, y: 25))
+        XCTAssertEqual(line.corners, [100])
+    }
+
+    func test_FR_CAL_02_pairsLagTheTargetAndSkipCatchUpAndCorners() {
+        let line = Polyline([CGPoint(x: 100, y: 100), CGPoint(x: 1100, y: 100), CGPoint(x: 1100, y: 600)])
+        let speed: CGFloat = 500 // px/s: corner at t = 2 s
+        let samples = stride(from: 0.0, to: 3.0, by: 1.0 / 15).map { PoseSample(timestamp: 10 + $0, yaw: 0, pitch: 0) }
+        let pairs = CalibrationOverlay.pursuitPairs(samples, rest: 0...1, centre: .zero, tour: 10...13, path: line, speed: speed, in: a)
+        let times = pairs.map(\.sample.timestamp)
+        XCTAssertFalse(times.contains { $0 < 10.5 - 1e-9 }, "first 0.4 s (+0.1 lag) skipped while the eyes catch up")
+        XCTAssertFalse(times.contains { abs($0 - 0.1 - 12) < 0.25 }, "no pairs near the corner")
+        // A sample at 11.2 s pairs with where the gleam was at 11.1 s: 550 px along from x 100 → x 650.
+        let at = pairs.first { abs($0.sample.timestamp - 11.2) < 1e-6 }
+        XCTAssertEqual(at?.target.x ?? -1, 650.0 / 1920, accuracy: 1e-6)
+    }
+}

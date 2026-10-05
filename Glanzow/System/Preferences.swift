@@ -43,6 +43,16 @@ public enum Pref {
     public static let hotkeyCode = "hotkeyCode"
     public static let hotkeyModifiers = "hotkeyModifiers"
     public static let hotkeyLabel = "hotkeyLabel"
+    public static let undoHotkeyCode = "undoHotkeyCode"
+    public static let undoHotkeyModifiers = "undoHotkeyModifiers"
+    public static let undoHotkeyLabel = "undoHotkeyLabel"
+    public static let magicPointer = "magicPointer"     // the pointer jumps to where you look when you reach for the mouse
+    public static let eyeBreaks = "eyeBreaks"           // 20-20-20 reminders, finished by looking away
+    public static let privacyGuard = "privacyGuard"     // veil the screens when someone else watches
+    public static let feedbackStyle = "feedbackStyle"   // spotlight, ring, none
+    public static let statsDay = "statsDay"
+    public static let statsSwitches = "statsSwitches"
+    public static let statsUndos = "statsUndos"
     public static let excludedApps = "excludedApps"
     public static let showActiveBorder = "showActiveBorder"
     public static let confirmMode = "confirmMode"
@@ -73,13 +83,20 @@ public enum Pref {
         flashOnSwitch: true,
         learnFromClicks: true,
         cameraID: "",                 // "" = built-in camera
-        hotkeyCode: 5,                // kVK_ANSI_G
-        hotkeyModifiers: 768,         // cmdKey | shiftKey
-        hotkeyLabel: "⇧⌘G",
+        hotkeyCode: 4,                // kVK_ANSI_H: "Hold"
+        hotkeyModifiers: 6144,        // controlKey | optionKey
+        hotkeyLabel: "⌃⌥H",
+        undoHotkeyCode: 6,            // kVK_ANSI_Z
+        undoHotkeyModifiers: 6144,
+        undoHotkeyLabel: "⌃⌥Z",
+        magicPointer: false,
+        eyeBreaks: false,
+        privacyGuard: false,
+        feedbackStyle: "spotlight",
         excludedApps: [String](),
         showActiveBorder: false,
         confirmMode: false,
-        confirmKey: "fn",
+        confirmKey: "option",         // not Fn: double-tapping Fn starts Dictation on many Macs
         onboardingDone: false,
         focusWithinScreen: true,
         focusPanes: true,

@@ -19,40 +19,51 @@ import QuartzCore
 
     // MARK: Calibration
 
-    /// Runs the dot path on each target display in turn. Nil if the user pressed Escape.
+    /// "Trace the gleam": on each target display, a short rest at the centre, then the light
+    /// glides once around the screen (every corner and shared edge, FR-CAL-01) and across the
+    /// middle, at an easy pace for the eyes to follow. This is smooth-pursuit calibration
+    /// (Pfeuffer et al., UIST 2013): every frame on the way is a training pair, many times more
+    /// data than resting on a few dots, in about 15 s a screen. Nil if the user pressed Escape.
     public func calibrate(_ targets: [DisplayInfo], among all: [DisplayInfo], cameraID: String) async -> Outcome? {
         open(all)
         var outcome = Outcome(models: [], failed: [])
         let ordered = targets.sorted(by: { $0.bounds.minX < $1.bounds.minX })
         for (i, d) in ordered.enumerated() {
-            focus(on: d, title: "Follow the light", subtitle: "Look at it the way you naturally would, with your head and eyes.")
+            focus(on: d, title: "Follow the gleam", subtitle: "Watch it with your eyes as it glides around this screen. Your head can move as it likes.")
             let view = windows[d.key]!.dotView
-            let points = Self.points(for: d, among: all)
+            let path = Polyline(Self.pursuitPath(for: d, among: all))
+            let centre = CGPoint(x: d.bounds.midX, y: d.bounds.midY)
             view.setProgress(ordered.count > 1 ? "Screen \(i + 1) of \(ordered.count)" : "")
-            view.moveDot(to: view.local(points[0], in: d), animated: false)
-            guard await pause(2.0) else { return nil }
-            view.setText(title: "", subtitle: "Keep looking at the light")
-            // FR-CAL-01: about 20 s per display, split across its points.
-            let hold = min(max(20 / Double(points.count) - 0.45, 1.6), 3.0)
-            // Each hold: when samples count, and where the light was (normalised, for the gaze map).
-            var windowsOfInterest: [(range: ClosedRange<TimeInterval>, target: SIMD2<Double>)] = []
+            view.moveDot(to: view.local(centre, in: d), animated: false)
+            guard await pause(1.8) else { return nil }
+            view.setText(title: "", subtitle: "Keep your eyes on the gleam")
             samples.removeAll()
-            for (j, p) in points.enumerated() {
-                view.setProgress(ordered.count > 1 ? "Screen \(i + 1) of \(ordered.count), point \(j + 1) of \(points.count)"
-                                                   : "Point \(j + 1) of \(points.count)")
-                view.moveDot(to: view.local(p, in: d), animated: true)
-                guard await pause(0.45) else { return nil }
-                let arrived = now()
-                view.hold(for: hold) // the ring closes in while samples are taken
-                guard await pause(hold) else { return nil }
-                view.release()
-                // FR-CAL-02: only while the dot is still and a face is seen; skip the first 300 ms.
-                let target = SIMD2(Double((p.x - d.bounds.minX) / d.bounds.width), Double((p.y - d.bounds.minY) / d.bounds.height))
-                windowsOfInterest.append(((arrived + 0.3)...now(), target))
+            // A short rest at the centre anchors the middle of the screen.
+            view.hold(for: 1.2)
+            let restStart = now()
+            guard await pause(1.2) else { return nil }
+            view.release()
+            let restEnd = now()
+            // Ease over to where the tour starts; not sampled.
+            view.moveDot(to: view.local(path.position(at: 0), in: d), animated: true)
+            guard await pause(0.5) else { return nil }
+            // The tour, at a constant speed chosen so it takes about 12 s.
+            let speed = max(path.length / 12, 1)
+            let tourStart = now()
+            while true {
+                guard !cancelled else { return nil }
+                let travelled = CGFloat(now() - tourStart) * speed
+                if travelled >= path.length { break }
+                view.moveDot(to: view.local(path.position(at: travelled), in: d), animated: false, trail: true)
+                if ordered.count > 1 {
+                    view.setProgress("Screen \(i + 1) of \(ordered.count), \(Int(travelled / path.length * 100))%")
+                }
+                try? await Task.sleep(for: .milliseconds(16))
             }
-            let pairs = samples.compactMap { s in
-                windowsOfInterest.first { $0.range.contains(s.timestamp) }.map { (sample: s, target: $0.target) }
-            }
+            view.clearTrail()
+            let tourEnd = now()
+            let pairs = Self.pursuitPairs(samples, rest: (restStart + 0.3)...restEnd, centre: centre,
+                                          tour: tourStart...tourEnd, path: path, speed: speed, in: d)
             if var m = DisplayModel.fit(key: d.key, name: d.name, cameraID: cameraID, samples: pairs.map(\.sample)) {
                 m.gaze = GazeMap.fit(pairs) // FR-P2-01
                 let stride = max(1, pairs.count / DisplayModel.maxGazePairs) // keep an even spread
@@ -63,6 +74,35 @@ import QuartzCore
             }
         }
         return outcome
+    }
+
+    /// FR-CAL-02 for a moving target: pairs each pose with where the gleam was a moment before
+    /// (the eyes trail a moving target by about 0.1 s), skipping the first 0.4 s of the tour,
+    /// while the eyes catch up, and 0.25 s either side of each corner, where they cut it short.
+    nonisolated static func pursuitPairs(_ samples: [PoseSample], rest: ClosedRange<TimeInterval>, centre: CGPoint,
+                                         tour: ClosedRange<TimeInterval>, path: Polyline, speed: CGFloat,
+                                         in d: DisplayInfo, lag: TimeInterval = 0.1) -> [(sample: PoseSample, target: SIMD2<Double>)] {
+        func normalised(_ p: CGPoint) -> SIMD2<Double> {
+            SIMD2(Double((p.x - d.bounds.minX) / d.bounds.width), Double((p.y - d.bounds.minY) / d.bounds.height))
+        }
+        let cornerGap = 0.25 * Double(speed)
+        return samples.compactMap { s in
+            if rest.contains(s.timestamp) { return (s, normalised(centre)) }
+            let t = s.timestamp - lag
+            guard t >= tour.lowerBound + 0.4, t <= tour.upperBound else { return nil }
+            let travelled = CGFloat(t - tour.lowerBound) * speed
+            guard path.corners.allSatisfy({ abs(Double($0 - travelled)) > cornerGap }) else { return nil }
+            return (s, normalised(path.position(at: travelled)))
+        }
+    }
+
+    /// The tour: the FR-CAL-01 points in order (every corner, and two points on each shared edge),
+    /// back to the first corner, then across the middle left to right and top to bottom.
+    nonisolated public static func pursuitPath(for d: DisplayInfo, among all: [DisplayInfo], inset: CGFloat = 60) -> [CGPoint] {
+        let r = d.bounds.insetBy(dx: inset, dy: inset)
+        let loop = Array(points(for: d, among: all, inset: inset).dropFirst()) // without the centre
+        return loop + [loop[0], CGPoint(x: r.minX, y: r.midY), CGPoint(x: r.maxX, y: r.midY),
+                       CGPoint(x: r.midX, y: r.minY), CGPoint(x: r.midX, y: r.maxY)]
     }
 
     /// FR-CAL-01 dot path in global coordinates: centre, the four corners, and two points along
@@ -122,12 +162,12 @@ import QuartzCore
     }
 
     #if DEBUG
-    /// A calibration screen mid-hold, for design snapshots.
+    /// A calibration screen mid-tour, for design snapshots.
     public static func preview(size: CGSize) -> NSView {
         let v = DotView(frame: CGRect(origin: .zero, size: size))
-        v.setText(title: "Follow the light", subtitle: "Turn your head with it, the way you would naturally look at this screen.")
-        v.setProgress("Screen 2 of 3, point 3 of 7")
-        v.moveDot(to: CGPoint(x: size.width - 60, y: 60), animated: false)
+        v.setText(title: "", subtitle: "Keep your eyes on the gleam")
+        v.setProgress("Screen 2 of 3, 38%")
+        for i in 0..<18 { v.moveDot(to: CGPoint(x: size.width - 60, y: 120 + CGFloat(i) * 14), animated: false, trail: true) }
         return v
     }
     #endif
@@ -253,6 +293,12 @@ final class DotView: NSView {
         ring.lineWidth = 2
         dot.addSublayer(ring)
         dot.addSublayer(core)
+        trail.fillColor = nil
+        trail.strokeColor = Palette.gleam.withAlphaComponent(0.28).cgColor
+        trail.lineWidth = 7
+        trail.lineCap = .round
+        trail.lineJoin = .round
+        layer?.addSublayer(trail)
         layer?.addSublayer(dot)
 
         let w = frame.width
@@ -278,7 +324,23 @@ final class DotView: NSView {
     /// Global display coordinates → this view's (flipped) coordinates.
     func local(_ p: CGPoint, in d: DisplayInfo) -> CGPoint { CGPoint(x: p.x - d.bounds.minX, y: p.y - d.bounds.minY) }
 
-    func moveDot(to p: CGPoint, animated: Bool) {
+    private let trail = CAShapeLayer()
+    private var trailPoints: [CGPoint] = []
+
+    func moveDot(to p: CGPoint, animated: Bool, trail showTrail: Bool = false) {
+        if showTrail {
+            // A soft comet tail of the last ~0.3 s, so the motion reads as smooth and alive.
+            trailPoints.append(p)
+            if trailPoints.count > 18 { trailPoints.removeFirst(trailPoints.count - 18) }
+            let path = CGMutablePath()
+            path.addLines(between: trailPoints)
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            trail.path = path
+            dot.position = p
+            CATransaction.commit()
+            return
+        }
         release()
         CATransaction.begin()
         CATransaction.setDisableActions(!animated)
@@ -321,6 +383,11 @@ final class DotView: NSView {
         ring.strokeColor = Palette.gleam.withAlphaComponent(0.55).cgColor
     }
 
+    func clearTrail() {
+        trailPoints.removeAll()
+        trail.path = nil
+    }
+
     func setDot(visible: Bool) { dot.isHidden = !visible }
 
     func setText(title t: String, subtitle s: String) {
@@ -339,5 +406,43 @@ final class DotView: NSView {
     func setDimmed(_ dimmed: Bool) {
         layer?.backgroundColor = Palette.night.withAlphaComponent(dimmed ? 0.82 : 0.95).cgColor
         vignette.isHidden = dimmed
+    }
+}
+
+/// A path through points, walked by distance along it.
+struct Polyline {
+    let points: [CGPoint]
+    private let cumulative: [CGFloat]
+    /// Distances along the path where it turns by more than 30°.
+    let corners: [CGFloat]
+
+    init(_ points: [CGPoint]) {
+        self.points = points
+        var c: [CGFloat] = [0]
+        for (a, b) in zip(points, points.dropFirst()) { c.append(c.last! + hypot(b.x - a.x, b.y - a.y)) }
+        cumulative = c
+        var turns: [CGFloat] = []
+        if points.count >= 3 {
+            for i in 1..<(points.count - 1) {
+                let u = CGPoint(x: points[i].x - points[i - 1].x, y: points[i].y - points[i - 1].y)
+                let v = CGPoint(x: points[i + 1].x - points[i].x, y: points[i + 1].y - points[i].y)
+                let nu = hypot(u.x, u.y), nv = hypot(v.x, v.y)
+                guard nu > 0, nv > 0 else { continue }
+                if (u.x * v.x + u.y * v.y) / (nu * nv) < cos(.pi / 6) { turns.append(c[i]) }
+            }
+        }
+        corners = turns
+    }
+
+    var length: CGFloat { cumulative.last ?? 0 }
+
+    func position(at distance: CGFloat) -> CGPoint {
+        guard let first = points.first else { return .zero }
+        guard distance > 0 else { return first }
+        guard distance < length else { return points.last! }
+        let i = cumulative.lastIndex { $0 <= distance }!
+        let span = cumulative[i + 1] - cumulative[i]
+        let f = span > 0 ? (distance - cumulative[i]) / span : 0
+        return CGPoint(x: points[i].x + (points[i + 1].x - points[i].x) * f, y: points[i].y + (points[i + 1].y - points[i].y) * f)
     }
 }

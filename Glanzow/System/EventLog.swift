@@ -9,6 +9,13 @@ public final class EventLog: @unchecked Sendable {
 
     public init(url: URL = Paths.appSupport.appending(path: "events.jsonl")) { self.url = url }
 
+    public func erase() {
+        queue.async { [url] in
+            try? FileManager.default.removeItem(at: url)
+            try? FileManager.default.removeItem(at: url.appendingPathExtension("1"))
+        }
+    }
+
     public func append(_ event: String, _ fields: [String: Any]) {
         var line = fields
         line["event"] = event

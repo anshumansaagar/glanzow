@@ -39,6 +39,12 @@ public final class CalibrationStore: @unchecked Sendable {
         return displays.filter { !ok.contains($0.key) }
     }
 
+    /// Forgets every model and deletes the file.
+    public func removeAll() {
+        models.withLock { $0.removeAll() }
+        try? FileManager.default.removeItem(at: url)
+    }
+
     public func save() {
         do {
             try Paths.makePrivateDirectory(url.deletingLastPathComponent())

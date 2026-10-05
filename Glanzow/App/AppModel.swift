@@ -14,16 +14,46 @@ import GlanzowKit
 
         var title: String {
             switch self {
-            case .active: "Active — focus follows the screen you face"
-            case .paused: "Paused"
-            case .pausedBySystem: "Paused while the screen is locked or asleep"
-            case .resting: "Resting — the camera is off until you're back"
-            case .noFace: "No face in view"
-            case .needsPermission: "Needs permission"
-            case .needsCalibration: "Needs calibration"
-            case .noCamera: "No camera"
-            case .cameraBusy: "Camera unavailable — retrying"
-            case .calibrating: "Calibrating"
+            case .active: "Following you"
+            case .paused: "Holding — focus stays where it is"
+            case .pausedBySystem: "Holding while your Mac is locked"
+            case .resting: "Resting — camera off until you're back"
+            case .noFace: "Can't see you right now"
+            case .needsPermission: "Needs your permission"
+            case .needsCalibration: "Needs to learn your screens"
+            case .noCamera: "No camera available"
+            case .cameraBusy: "Camera busy — trying again"
+            case .calibrating: "Learning your screens"
+            }
+        }
+
+        /// One or two words, for the panel's status pill.
+        var short: String {
+            switch self {
+            case .active: "Following"
+            case .paused, .pausedBySystem: "Holding"
+            case .resting: "Resting"
+            case .noFace: "Can't see you"
+            case .needsPermission, .needsCalibration, .noCamera, .cameraBusy: "Needs you"
+            case .calibrating: "Learning"
+            }
+        }
+
+        var glyph: Glyph.Style {
+            switch self {
+            case .active: .following
+            case .paused, .pausedBySystem, .resting: .holding
+            case .noFace: .faint
+            case .needsPermission, .needsCalibration, .noCamera, .cameraBusy: .attention
+            case .calibrating: .learning
+            }
+        }
+
+        var tint: Color {
+            switch self {
+            case .active: .green
+            case .needsPermission, .needsCalibration, .noCamera, .cameraBusy: .orange
+            default: .secondary
             }
         }
 
@@ -52,6 +82,14 @@ import GlanzowKit
     @Published private(set) var isRecording = false
     @Published private(set) var calibrating = false
     @Published private(set) var uncalibrated: [DisplayInfo] = []
+    /// What the live view shows: the screen being looked at and, within it, the gaze point.
+    struct Live: Equatable {
+        var display: DisplayKey?
+        var gaze: CGPoint?
+    }
+    @Published private(set) var live = Live()
+    @Published private(set) var todayLine = ""
+    private var liveTimer: Timer?
     /// FR-CAL-07: displays are changing; the old map can't be trusted until it is rebuilt.
     private var reconfiguring = false { didSet { reconcile() } }
 
@@ -76,6 +114,7 @@ import GlanzowKit
     private var previousSwitch: SwitchRecord?
     private var lastClickAt = -Double.infinity
     private var hotkeySetting: (code: Int, modifiers: Int)?
+    private var undoHotkeySetting: (code: Int, modifiers: Int)?
     /// FR-SAF-04: lock, sleep, screensaver, fast user switching. Any reason stops the camera.
     private var systemPauses: Set<String> = [] { didSet { reconcile() } }
     private let eventLog = EventLog()
@@ -118,6 +157,11 @@ import GlanzowKit
 
     #if DEBUG
     func preview(displays list: [DisplayInfo]) { displays = list }
+    func previewLive() {
+        live = Live(display: displays.first?.key, gaze: displays.first.map { CGPoint(x: $0.bounds.midX + 300, y: $0.bounds.midY - 120) })
+        status = .active
+        todayLine = "Today: 128 switches, 2 undone"
+    }
     #endif
 
     func start() {
@@ -151,7 +195,6 @@ import GlanzowKit
         observeSystem()
         hotkey = Hotkey { [weak self] in self?.userPaused.toggle() }
         undoHotkey = Hotkey { [weak self] in self?.undoSwitch() }
-        undoHotkey?.register(keyCode: 6, modifiers: UInt32(controlKey | optionKey)) // ⌃⌥Z
         notifier.onExclude = { [weak self] bundle in self?.exclude(bundle) }
         if defaults.bool(forKey: Pref.onboardingDone) { notifier.requestPermission() }
         applySettings()
@@ -332,6 +375,11 @@ import GlanzowKit
         }
         if !defaults.bool(forKey: Pref.showActiveBorder) { feedback.showActive(nil) }
         input.confirmFlag = EventTapInputMonitor.confirmFlag(named: defaults.string(forKey: Pref.confirmKey) ?? "fn")
+        let undoKey = (defaults.integer(forKey: Pref.undoHotkeyCode), defaults.integer(forKey: Pref.undoHotkeyModifiers))
+        if undoHotkeySetting.map({ $0 != undoKey }) ?? true {
+            undoHotkeySetting = undoKey
+            undoHotkey?.register(keyCode: UInt32(undoKey.0), modifiers: UInt32(undoKey.1))
+        }
         let key = (defaults.integer(forKey: Pref.hotkeyCode), defaults.integer(forKey: Pref.hotkeyModifiers))
         if hotkeySetting.map({ $0 != key }) ?? true {
             hotkeySetting = key
@@ -477,6 +525,7 @@ import GlanzowKit
         eventLog.append("switch", fields) // NFR-01 latency, NFR-03 review
         if case .skipped = r.outcome { return }
         lastSwitchAt = r.time
+        countToday(switches: 1)
         learning.noteSwitch(at: r.time)
         learnSettle(from: r)
         log.info("switch → \(r.to, privacy: .public) settle-to-focus \(Int((t - r.pendingSince) * 1000)) ms")
@@ -493,11 +542,59 @@ import GlanzowKit
     }
 
     /// FR-LRN-01…04: learn from clicks while switching is live.
+    // MARK: Panel
+
+    /// The live view polls the controller ten times a second, only while the panel is open.
+    func panelOpened() {
+        refreshToday()
+        liveTimer?.invalidate()
+        liveTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                Task {
+                    let snap = await self.controller.snapshot()
+                    var looked: DisplayKey? = nil
+                    if !snap.noFace, case .candidate(let k)? = snap.classification { looked = k }
+                    if !snap.noFace, case .stay? = snap.classification { looked = snap.current }
+                    let next = Live(display: looked, gaze: looked == snap.current ? snap.gaze : nil)
+                    if next != self.live { self.live = next }
+                }
+            }
+        }
+    }
+
+    func panelClosed() {
+        liveTimer?.invalidate()
+        liveTimer = nil
+    }
+
+    /// Today's switches and undos, kept as two counters that reset at midnight.
+    private func countToday(switches: Int = 0, undos: Int = 0) {
+        let day = Date().formatted(.iso8601.year().month().day())
+        if defaults.string(forKey: Pref.statsDay) != day {
+            defaults.set(day, forKey: Pref.statsDay)
+            defaults.set(0, forKey: Pref.statsSwitches)
+            defaults.set(0, forKey: Pref.statsUndos)
+        }
+        defaults.set(defaults.integer(forKey: Pref.statsSwitches) + switches, forKey: Pref.statsSwitches)
+        defaults.set(defaults.integer(forKey: Pref.statsUndos) + undos, forKey: Pref.statsUndos)
+        refreshToday()
+    }
+
+    private func refreshToday() {
+        let day = Date().formatted(.iso8601.year().month().day())
+        let switches = defaults.string(forKey: Pref.statsDay) == day ? defaults.integer(forKey: Pref.statsSwitches) : 0
+        let undos = defaults.string(forKey: Pref.statsDay) == day ? defaults.integer(forKey: Pref.statsUndos) : 0
+        let s = switches == 0 ? "No switches yet today" : "Today: \(switches) switch\(switches == 1 ? "" : "es")"
+        todayLine = undos == 0 ? s : "\(s), \(undos) undone"
+    }
+
     /// ⌃⌥Z: put focus back where the last switch took it from, and learn from it.
     func undoSwitch() {
         Task {
             guard let r = await controller.undo(at: now()) else { return NSSound.beep() }
             eventLog.append("undo", ["to": r.to, "region": r.region ?? "", "afterMs": Int((now() - r.time) * 1000)])
+            countToday(undos: 1)
             settle.undone()
             storeSettle()
         }
@@ -528,6 +625,15 @@ import GlanzowKit
     private func storeSettle() {
         let ms = (settle.dwell * 1000).rounded()
         if defaults.double(forKey: Pref.learnedDwellMs) != ms { defaults.set(ms, forKey: Pref.learnedDwellMs) } // applySettings pushes it
+    }
+
+    /// Privacy: forget everything learned — screen models, learned timing, the switch log.
+    func eraseLearnedData() {
+        store.removeAll()
+        resetLearnedSettle()
+        eventLog.erase()
+        rebuildModels()
+        reconcile()
     }
 
     func resetLearnedSettle() {
@@ -859,7 +965,7 @@ import GlanzowKit
 
     func showOnboarding() {
         if onboardingWindow == nil {
-            let w = Self.window("Welcome to Glanzow", OnboardingView(model: self))
+            let w = Self.window("Set Up Glanzow", OnboardingView(model: self))
             // The night stage runs under a transparent title bar; the traffic lights sit on it.
             w.styleMask.insert(.fullSizeContentView)
             w.titlebarAppearsTransparent = true

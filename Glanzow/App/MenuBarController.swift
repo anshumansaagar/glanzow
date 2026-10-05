@@ -1,59 +1,88 @@
 import AppKit
 import Combine
+import SwiftUI
 import GlanzowKit
 
-/// FR-UI-01, FR-UI-02: status item whose icon tracks the app state, and its menu.
-@MainActor final class MenuBarController: NSObject, NSMenuDelegate {
+/// FR-UI-01, FR-UI-02: the gleam in the menu bar. Left-click opens the panel with the live
+/// view; right-click (or Control-click) opens the classic menu.
+@MainActor final class MenuBarController: NSObject, NSMenuDelegate, NSPopoverDelegate {
     private let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+    private let popover = NSPopover()
     private unowned let model: AppModel
     private var sub: AnyCancellable?
 
     init(model: AppModel) {
         self.model = model
         super.init()
-        let menu = NSMenu()
-        menu.delegate = self
-        item.menu = menu
+        item.button?.target = self
+        item.button?.action = #selector(clicked)
+        item.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
+        popover.behavior = .transient
+        popover.animates = true
+        popover.delegate = self
+        popover.contentViewController = NSHostingController(rootView: GlancePanel(model: model))
         sub = model.$status.sink { [weak self] status in self?.show(status) }
     }
 
     private func show(_ status: AppModel.Status) {
-        let image = NSImage(systemSymbolName: status.symbol, accessibilityDescription: "Glanzow: \(status.title)")
-        image?.isTemplate = true
-        item.button?.image = image
-        item.button?.title = image == nil ? "GF" : ""
+        item.button?.image = Glyph.image(status.glyph, description: "Glanzow: \(status.title)")
         item.button?.toolTip = "Glanzow — \(status.title)"
+    }
+
+    @objc private func clicked() {
+        let event = NSApp.currentEvent
+        if event?.type == .rightMouseUp || event?.modifierFlags.contains(.control) == true {
+            showMenu()
+        } else if popover.isShown {
+            popover.performClose(nil)
+        } else if let button = item.button {
+            NSApp.activate()
+            popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+        }
+    }
+
+    func popoverDidShow(_ notification: Notification) { model.panelOpened() }
+    func popoverDidClose(_ notification: Notification) { model.panelClosed() }
+
+    // MARK: Classic menu
+
+    private func showMenu() {
+        let menu = NSMenu()
+        menu.delegate = self
+        item.menu = menu
+        item.button?.performClick(nil)
+        item.menu = nil
     }
 
     func menuNeedsUpdate(_ menu: NSMenu) {
         menu.removeAllItems()
         let state = NSMenuItem(title: model.status.title, action: nil, keyEquivalent: "")
         state.isEnabled = false
-        state.image = NSImage(systemSymbolName: model.status.symbol, accessibilityDescription: nil)
         menu.addItem(state)
         menu.addItem(.separator())
 
-        let shortcut = UserDefaults.standard.string(forKey: Pref.hotkeyLabel) ?? ""
-        add(menu, "\(model.userPaused ? "Resume" : "Pause")   \(shortcut)", #selector(togglePause),
-            symbol: model.userPaused ? "play.fill" : "pause.fill")
+        let defaults = UserDefaults.standard
+        add(menu, "\(model.userPaused ? "Follow Me Again" : "Hold Focus")   \(defaults.string(forKey: Pref.hotkeyLabel) ?? "")",
+            #selector(toggleHold), symbol: model.userPaused ? "play.fill" : "pause.fill")
+        add(menu, "Undo Last Switch   \(defaults.string(forKey: Pref.undoHotkeyLabel) ?? "")", #selector(undo), symbol: "arrow.uturn.backward")
 
-        let recal = NSMenuItem(title: "Recalibrate", action: nil, keyEquivalent: "")
-        recal.image = NSImage(systemSymbolName: "scope", accessibilityDescription: nil)
+        let teach = NSMenuItem(title: "Teach My Screens", action: nil, keyEquivalent: "")
+        teach.image = NSImage(systemSymbolName: "sparkles", accessibilityDescription: nil)
         let sub = NSMenu()
-        add(sub, "All Displays", #selector(recalibrateAll))
+        add(sub, "All Screens", #selector(recalibrateAll))
         sub.addItem(.separator())
         for d in model.displays {
             let i = add(sub, d.name, #selector(recalibrateOne(_:)))
             i.representedObject = d.key
         }
-        recal.submenu = sub
-        menu.addItem(recal)
+        teach.submenu = sub
+        menu.addItem(teach)
 
         add(menu, "Settings…", #selector(settings), key: ",", symbol: "gearshape")
         let debug = add(menu, "Debug Settings…", #selector(debugSettings), key: ",", symbol: "ladybug")
         debug.keyEquivalentModifierMask = [.command, .option]
         debug.isAlternate = true
-        add(menu, "Welcome Guide…", #selector(welcome), symbol: "hand.wave")
+        add(menu, "Set Up Glanzow…", #selector(welcome), symbol: "checklist")
         menu.addItem(.separator())
         add(menu, "Quit Glanzow", #selector(quit), key: "q", symbol: "power")
     }
@@ -67,7 +96,8 @@ import GlanzowKit
         return i
     }
 
-    @objc private func togglePause() { model.userPaused.toggle() }
+    @objc private func toggleHold() { model.userPaused.toggle() }
+    @objc private func undo() { model.undoSwitch() }
     @objc private func recalibrateAll() { Task { await model.calibrate(nil) } }
     @objc private func recalibrateOne(_ sender: NSMenuItem) {
         guard let key = sender.representedObject as? String else { return }
