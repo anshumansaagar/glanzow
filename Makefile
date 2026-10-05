@@ -8,7 +8,7 @@ SIGN_ID    ?= $(shell security find-identity -v -p codesigning | awk -F'"' '/Dev
 TIMESTAMP  ?= --timestamp=none
 NOTARY_PROFILE ?= glanzow-notary
 
-.PHONY: app run test replay dmg notarize reset-permissions diagnostics clean
+.PHONY: app run test verify replay dmg notarize reset-permissions diagnostics clean
 
 app:
 	swift build -c $(CONFIG) --product Glanzow
@@ -17,6 +17,16 @@ app:
 	cp Resources/Info.plist $(APP)/Contents/
 	codesign --force --options runtime $(TIMESTAMP) --entitlements Resources/Glanzow.entitlements --sign "$(SIGN_ID)" $(APP)
 	@echo "Built $(APP) (signed: $(SIGN_ID))"
+	@if [ "$(CONFIG)" = "release" ]; then $(MAKE) --no-print-directory verify; fi
+
+# Release safety checks: valid signature, hardened runtime, the camera as the only entitlement
+# (no debugger attach, no library injection), no debug-only code, only Apple system libraries.
+verify:
+	@codesign --verify --strict $(APP) && echo "✓ signature valid"
+	@codesign -dv $(APP) 2>&1 | grep -q "flags=.*runtime" && echo "✓ hardened runtime on"
+	@codesign -d --entitlements - --xml $(APP) 2>/dev/null | plutil -convert json -o - - | python3 -c 'import json,sys; e=json.load(sys.stdin); extra=sorted(set(e)-{"com.apple.security.device.camera"}); sys.exit("✗ unexpected entitlements: %s" % extra) if extra else print("✓ entitlements: camera only")'
+	@if strings $(APP)/Contents/MacOS/Glanzow | grep -q -- "--snapshots"; then echo "✗ debug-only code in a release build"; exit 1; else echo "✓ no debug-only code"; fi
+	@if otool -L $(APP)/Contents/MacOS/Glanzow | tail -n +2 | grep -vqE "^\s*/(usr/lib|System/Library)/"; then echo "✗ links a non-system library"; exit 1; else echo "✓ system libraries only"; fi
 
 run: app
 	open $(APP)

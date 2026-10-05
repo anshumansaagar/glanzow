@@ -1,4 +1,5 @@
 import AppKit
+import Carbon
 import ApplicationServices
 import AVFoundation
 import ServiceManagement
@@ -9,13 +10,14 @@ import GlanzowKit
 /// calibration state into one menu bar status.
 @MainActor final class AppModel: ObservableObject {
     enum Status: Equatable {
-        case active, paused, pausedBySystem, noFace, needsPermission, needsCalibration, noCamera, cameraBusy, calibrating
+        case active, paused, pausedBySystem, resting, noFace, needsPermission, needsCalibration, noCamera, cameraBusy, calibrating
 
         var title: String {
             switch self {
             case .active: "Active — focus follows the screen you face"
             case .paused: "Paused"
             case .pausedBySystem: "Paused while the screen is locked or asleep"
+            case .resting: "Resting — the camera is off until you're back"
             case .noFace: "No face in view"
             case .needsPermission: "Needs permission"
             case .needsCalibration: "Needs calibration"
@@ -29,6 +31,7 @@ import GlanzowKit
             switch self {
             case .active: "eye"
             case .paused, .pausedBySystem: "pause.circle"
+            case .resting: "moon"
             case .noFace: "eye.slash"
             case .needsPermission: "exclamationmark.triangle"
             case .needsCalibration, .calibrating: "scope"
@@ -68,6 +71,10 @@ import GlanzowKit
     private let feedback = FocusFeedback()
     private lazy var notifier = Notifier() // lazy: UNUserNotificationCenter needs a real .app bundle
     private var hotkey: Hotkey?
+    private var undoHotkey: Hotkey?
+    private lazy var settle = SettleLearner(dwell: Tuning(defaults).dwell)
+    private var previousSwitch: SwitchRecord?
+    private var lastClickAt = -Double.infinity
     private var hotkeySetting: (code: Int, modifiers: Int)?
     /// FR-SAF-04: lock, sleep, screensaver, fast user switching. Any reason stops the camera.
     private var systemPauses: Set<String> = [] { didSet { reconcile() } }
@@ -143,6 +150,8 @@ import GlanzowKit
         startLockWatchdog()
         observeSystem()
         hotkey = Hotkey { [weak self] in self?.userPaused.toggle() }
+        undoHotkey = Hotkey { [weak self] in self?.undoSwitch() }
+        undoHotkey?.register(keyCode: 6, modifiers: UInt32(controlKey | optionKey)) // ⌃⌥Z
         notifier.onExclude = { [weak self] bundle in self?.exclude(bundle) }
         if defaults.bool(forKey: Pref.onboardingDone) { notifier.requestPermission() }
         applySettings()
@@ -182,7 +191,10 @@ import GlanzowKit
         }
         input.onClick = { [weak self] click in self?.clicked(click) }
         input.onConfirm = { t in Task { await controller.confirm(at: t) } }
-        input.onActivity = { [recorder] kind, t in recorder.record(kind, at: t) }
+        input.onActivity = { [weak self, recorder] kind, t in
+            recorder.record(kind, at: t)
+            if self?.resting == true { self?.setSystemPause("away", false) } // a key or the mouse: someone's back
+        }
     }
 
     /// FR-P2: keeps the controller's picture of the current display's windows and panes fresh.
@@ -274,6 +286,7 @@ import GlanzowKit
     private func computeStatus() -> Status {
         if !cameraAuthorized || !permissionsGranted { return .needsPermission }
         if userPaused { return .paused }
+        if systemPauses == ["away"] { return .resting }
         if !systemPauses.isEmpty { return .pausedBySystem }
         if calibrating { return .calibrating }
         if cameraState == .noCamera { return .noCamera }
@@ -465,6 +478,7 @@ import GlanzowKit
         if case .skipped = r.outcome { return }
         lastSwitchAt = r.time
         learning.noteSwitch(at: r.time)
+        learnSettle(from: r)
         log.info("switch → \(r.to, privacy: .public) settle-to-focus \(Int((t - r.pendingSince) * 1000)) ms")
     }
 
@@ -479,7 +493,50 @@ import GlanzowKit
     }
 
     /// FR-LRN-01…04: learn from clicks while switching is live.
+    /// ⌃⌥Z: put focus back where the last switch took it from, and learn from it.
+    func undoSwitch() {
+        Task {
+            guard let r = await controller.undo(at: now()) else { return NSSound.beep() }
+            eventLog.append("undo", ["to": r.to, "region": r.region ?? "", "afterMs": Int((now() - r.time) * 1000)])
+            settle.undone()
+            storeSettle()
+        }
+    }
+
+    /// The learned settle time (SettleLearner): bounces nobody typed into slow it down a little,
+    /// switches that were used at once speed it up a little. Screen switches only.
+    private func learnSettle(from r: SwitchRecord) {
+        guard r.region == nil, defaults.bool(forKey: Pref.adaptiveSettle) else { return }
+        settle.switched(at: r.time)
+        if let p = previousSwitch, p.region == nil, p.to == r.from, p.from == r.to, r.time - p.time < 1.5,
+           input.lastKeystroke < p.time, lastClickAt < p.time {
+            settle.bounced(at: r.time)
+            storeSettle()
+        }
+        previousSwitch = r
+        // Three seconds later: did the user type or click on the screen they switched to?
+        Task { [weak self] in
+            try? await Task.sleep(for: .seconds(3))
+            guard let self, self.previousSwitch?.time == r.time else { return }
+            if self.input.lastKeystroke > r.time || self.lastClickAt > r.time {
+                self.settle.used(at: r.time + 3)
+                self.storeSettle()
+            }
+        }
+    }
+
+    private func storeSettle() {
+        let ms = (settle.dwell * 1000).rounded()
+        if defaults.double(forKey: Pref.learnedDwellMs) != ms { defaults.set(ms, forKey: Pref.learnedDwellMs) } // applySettings pushes it
+    }
+
+    func resetLearnedSettle() {
+        defaults.removeObject(forKey: Pref.learnedDwellMs)
+        settle = SettleLearner(dwell: Tuning(defaults).dwell)
+    }
+
     private func clicked(_ click: EventTapInputMonitor.Click) {
+        lastClickAt = click.time
         guard let key = registry.display(at: click.location)?.key else { return }
         recorder.record(.click, at: click.time, display: key)
         guard switchingEnabled, defaults.bool(forKey: Pref.learnFromClicks) else { return }
@@ -578,8 +635,20 @@ import GlanzowKit
                 guard let self else { return }
                 let actual = Self.systemLockState()
                 for reason in ["lock", "screensaver"] { self.setSystemPause(reason, actual.contains(reason)) }
+                self.restIfAway()
             }
         }
+    }
+
+    private var resting: Bool { systemPauses.contains("away") }
+
+    /// Nobody seen for 2 minutes and no keyboard or mouse for 2 minutes: turn the camera off (its
+    /// light goes out) until the next keystroke or mouse movement. Less camera time, less battery.
+    private func restIfAway() {
+        guard defaults.bool(forKey: Pref.restWhenAway), !resting, !calibrating, case .running = cameraState, !faceVisible else { return }
+        let t = now()
+        guard t - lastFaceTime >= 120, t - max(input.lastKeystroke, input.lastMouseActivity) >= 120 else { return }
+        setSystemPause("away", true)
     }
 
     static let callApps: Set<String> = ["us.zoom.xos", "com.microsoft.teams", "com.microsoft.teams2", "com.apple.FaceTime",

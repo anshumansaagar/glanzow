@@ -32,7 +32,7 @@ final class SwitchControllerTests: XCTestCase {
     }
 
     /// C also has a gaze map: x = 0.5 + yaw/40, y = 0.5 + pitch/30 (head only).
-    private static let classifier = MahalanobisClassifier(models: [
+    fileprivate static let classifier = MahalanobisClassifier(models: [
         DisplayModel(key: "C", name: "C", mean: SIMD2(0, 0), covariance: Cov2(xx: 36, xy: 0, yy: 36), meanFaceScale: 0.2, cameraID: "", sampleCount: 50,
                      gaze: GazeMap(head: [[0.5, 1.0 / 40, 0], [0.5, 0, 1.0 / 30]], eyes: nil, headError: 0.05, eyesError: nil)),
         DisplayModel(key: "R", name: "R", mean: SIMD2(30, 0), covariance: Cov2(xx: 36, xy: 0, yy: 36), meanFaceScale: 0.2, cameraID: "", sampleCount: 50),
@@ -252,4 +252,42 @@ extension RegionSwitchTests {
         let calls = await harness.runForTests(steps, layout: layout)
         XCTAssertEqual(calls.map(\.d), ["@w2"])
     }
+}
+
+/// Undo: focus returns, and the undone screen is held off until the gaze moves.
+final class UndoTests: XCTestCase {
+    func test_undoReturnsFocusAndHoldsOffTheUndoneScreen() async {
+        let input = FakeInput()
+        let focus = FakeFocus()
+        let c = SwitchController(classifier: SwitchControllerTests.sharedClassifier, tuning: Tuning(), focus: focus, input: input)
+        await c.setCurrent("C")
+        await c.setPaused(false)
+        for k in 15..<25 { await c.handle(.pose(PoseSample(timestamp: Double(k) / 15, yaw: 30, pitch: 0))) }
+        let undone = await c.undo(at: 25.0 / 15)
+        XCTAssertEqual(undone?.to, "R")
+        let afterUndo = await focus.calls
+        XCTAssertEqual(afterUndo, ["R", "C"], "switched to R, then undo focused C")
+        // Still looking at R: no switch back for 5 s.
+        for k in 25..<90 { await c.handle(.pose(PoseSample(timestamp: Double(k) / 15, yaw: 30, pitch: 0))) }
+        let held = await focus.calls
+        XCTAssertEqual(held.count, 2)
+        // Look away to C, then back to R: allowed again.
+        for k in 90..<100 { await c.handle(.pose(PoseSample(timestamp: Double(k) / 15, yaw: 0, pitch: 0))) }
+        for k in 100..<110 { await c.handle(.pose(PoseSample(timestamp: Double(k) / 15, yaw: 30, pitch: 0))) }
+        let final = await focus.calls
+        XCTAssertEqual(final, ["R", "C", "R"])
+    }
+
+    func test_nothingToUndoAfterTenSeconds() async {
+        let c = SwitchController(classifier: SwitchControllerTests.sharedClassifier, tuning: Tuning(), focus: FakeFocus(), input: FakeInput())
+        await c.setCurrent("C")
+        await c.setPaused(false)
+        for k in 15..<25 { await c.handle(.pose(PoseSample(timestamp: Double(k) / 15, yaw: 30, pitch: 0))) }
+        let undone = await c.undo(at: 20)
+        XCTAssertNil(undone)
+    }
+}
+
+extension SwitchControllerTests {
+    static var sharedClassifier: MahalanobisClassifier { classifier }
 }

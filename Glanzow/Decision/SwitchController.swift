@@ -10,6 +10,8 @@ public struct SwitchRecord: Sendable {
     public var focusDuration: TimeInterval   // time spent raising and warping
     /// Set for a window or pane switch within one display (FR-P2).
     public var region: String? = nil
+    /// The region that had focus before a within-screen switch, so it can be undone.
+    public var fromRegion: String? = nil
 }
 
 /// §6.4: turns per-frame classifications into focus changes, gated by dwell, the typing and
@@ -52,6 +54,9 @@ public actor SwitchController {
     private var regionPending: String?
     private var fixation = FixationDetector(dispersion: 150, duration: 0.45)
     private var gaze: CGPoint?
+    private var lastSuccess: SwitchRecord?
+    /// After an undo: don't go straight back to what was undone (a display key or region id).
+    private var suppressed: (target: String, until: TimeInterval)?
     private var blockedBy: String?
 
     public init(classifier: any DisplayClassifier, tuning: Tuning, focus: any FocusPerformer, input: any InputMonitor,
@@ -137,6 +142,10 @@ public actor SwitchController {
             blockedBy = nil
             return
         }
+        if let s = suppressed {
+            if s.target == d && t < s.until { return }
+            if s.target != d { suppressed = nil } // the gaze moved on: the undo has done its job
+        }
         guard d != current, t - pendingSince >= tuning.dwell else { return } // FR-CLS-04
         if tuning.confirmMode { blockedBy = "waiting for confirm double-tap"; return } // FR-SAF-08
         await attempt(d, at: t, confirmed: false)
@@ -174,6 +183,10 @@ public actor SwitchController {
             regionPending = nil
             return
         }
+        if let s = suppressed {
+            if s.target == target.id && t < s.until { return }
+            if s.target != target.id { suppressed = nil }
+        }
         regionPending = target.id
         guard t >= retryAfter, !inFlight else { return }
         if t - input.lastMouseActivity < tuning.mouseQuiet { blockedBy = "mouse"; return }
@@ -190,18 +203,43 @@ public actor SwitchController {
         let started = now()
         let outcome = await focus.focus(region: target)
         let record = SwitchRecord(time: t, pendingSince: t - tuning.regionDwell, from: cur, to: cur, outcome: outcome,
-                                  focusDuration: now() - started, region: target.id)
+                                  focusDuration: now() - started, region: target.id, fromRegion: layout.focused)
         switch outcome {
         case .focusedWindow, .focusedPane, .pointerOnly:
             self.layout?.focused = target.id
             regionPending = nil
             blockedBy = nil
             fixation.reset() // the next move needs a fresh fixation
+            lastSuccess = record
         case .skipped(let why):
             blockedBy = why
             retryAfter = t + 1
         }
         onSwitch?(record)
+    }
+
+    /// Undo the last switch (within 10 s): focus goes back to what it replaced, and the undone
+    /// target is held off for 5 s or until the gaze moves elsewhere. Returns what was undone.
+    public func undo(at t: TimeInterval) async -> SwitchRecord? {
+        guard let last = lastSuccess, t - last.time < 10, !inFlight else { return nil }
+        inFlight = true
+        defer { inFlight = false }
+        if let region = last.region {
+            guard let back = last.fromRegion, let r = layout?.regions.first(where: { $0.id == back }) else { return nil }
+            _ = await focus.focus(region: r)
+            layout?.focused = back
+            suppressed = (region, t + 5)
+        } else {
+            guard let from = last.from, from != last.to else { return nil }
+            _ = await focus.focus(display: from)
+            current = from
+            suppressed = (last.to, t + 5)
+        }
+        pending = nil
+        regionPending = nil
+        fixation.reset()
+        lastSuccess = nil
+        return last
     }
 
     /// FR-SAF-08: the user double-tapped the confirm key while facing a display: switch now, no dwell or typing wait.
@@ -241,6 +279,7 @@ public actor SwitchController {
             // If the user focused something else while we were raising, theirs wins.
             if current == from { current = d }
             blockedBy = nil
+            lastSuccess = record
         case .skipped(let why):
             blockedBy = why
             retryAfter = t + 1 // don't hammer an unresponsive or excluded app every frame

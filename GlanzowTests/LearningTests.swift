@@ -62,3 +62,26 @@ final class LearningTests: XCTestCase {
         XCTAssertNil(g.update(.pose(PoseSample(timestamp: 36.1, yaw: 10.5, pitch: 0))), "still moving: stays at 15")
     }
 }
+
+/// The learned settle time (adaptive dwell).
+final class SettleLearnerTests: XCTestCase {
+    func test_undoAndBouncesSlowItDownUseSpeedsItUpWithinBounds() {
+        var l = SettleLearner(dwell: 0.3)
+        l.switched(at: 0); l.undone()
+        XCTAssertEqual(l.dwell, 0.34, accuracy: 1e-9)
+        l.switched(at: 20); l.bounced(at: 21)
+        XCTAssertEqual(l.dwell, 0.355, accuracy: 1e-9)
+        for k in 0..<200 { let t = 100 + Double(k) * 30; l.switched(at: t); l.used(at: t + 1) }
+        XCTAssertEqual(l.dwell, 0.25, accuracy: 1e-9, "never below the floor")
+        for _ in 0..<50 { l.undone() }
+        XCTAssertEqual(l.dwell, 0.6, accuracy: 1e-9, "never above the ceiling")
+    }
+
+    func test_rapidBurstsTeachNothing() {
+        var l = SettleLearner(dwell: 0.3)
+        for t in [0.0, 1, 2, 3] { l.switched(at: t) }
+        l.bounced(at: 3.5)
+        l.used(at: 3.6)
+        XCTAssertEqual(l.dwell, 0.3, accuracy: 1e-9)
+    }
+}

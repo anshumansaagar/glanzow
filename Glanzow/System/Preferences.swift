@@ -51,6 +51,9 @@ public enum Pref {
     public static let focusWithinScreen = "focusWithinScreen"   // FR-P2-01
     public static let focusPanes = "focusPanes"                 // FR-P2-02
     public static let paneClickFallback = "paneClickFallback"   // FR-P2-02 opt-in click
+    public static let adaptiveSettle = "adaptiveSettle"         // learn the settle time from use
+    public static let restWhenAway = "restWhenAway"             // camera off when nobody is there
+    public static let learnedDwellMs = "learnedDwellMs"
     public static let suggestedCallApps = "suggestedCallApps"
     // Hidden debug pane
     public static let minCutoff = "minCutoff"
@@ -81,6 +84,8 @@ public enum Pref {
         focusWithinScreen: true,
         focusPanes: true,
         paneClickFallback: false,
+        adaptiveSettle: true,
+        restWhenAway: true,
         suggestedCallApps: [String](),
         minCutoff: 1.0,
         beta: 0.05,
@@ -123,6 +128,9 @@ public struct Tuning: Sendable, Equatable {
 
     public init(_ d: UserDefaults) {
         dwell = clamp(d.double(forKey: Pref.dwellMs), 100, 1000) / 1000
+        if d.bool(forKey: Pref.adaptiveSettle), d.object(forKey: Pref.learnedDwellMs) != nil {
+            dwell = clamp(d.double(forKey: Pref.learnedDwellMs), 250, 600) / 1000
+        }
         hysteresisFactor = Self.hysteresisFactor(headTurn: d.double(forKey: Pref.headTurn))
         rejectThreshold = clamp(d.double(forKey: Pref.rejectThreshold), 1, 20)
         typingPause = d.bool(forKey: Pref.waitWhileTyping) ? clamp(d.double(forKey: Pref.typingPause), 0.5, 10) : nil

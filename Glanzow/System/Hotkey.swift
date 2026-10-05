@@ -7,24 +7,34 @@ import Carbon
     private var ref: EventHotKeyRef?
     private var handler: EventHandlerRef?
     private let action: () -> Void
+    nonisolated private let id: UInt32
+    private static var nextID: UInt32 = 1
 
     public init(action: @escaping () -> Void) {
         self.action = action
+        id = Self.nextID
+        Self.nextID += 1
         var spec = EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed))
-        InstallEventHandler(GetApplicationEventTarget(), { _, _, userData in
-            guard let userData else { return noErr }
+        InstallEventHandler(GetApplicationEventTarget(), { _, event, userData in
+            guard let userData, let event else { return OSStatus(eventNotHandledErr) }
             let me = Unmanaged<Hotkey>.fromOpaque(userData).takeUnretainedValue()
+            // Every handler sees every hot key; act only on our own.
+            var pressed = EventHotKeyID()
+            GetEventParameter(event, EventParamName(kEventParamDirectObject), EventParamType(typeEventHotKeyID), nil,
+                              MemoryLayout<EventHotKeyID>.size, nil, &pressed)
+            guard pressed.signature == Hotkey.signature, pressed.id == me.id else { return OSStatus(eventNotHandledErr) }
             MainActor.assumeIsolated { me.action() } // the application event target fires on the main thread
             return noErr
         }, 1, &spec, Unmanaged.passUnretained(self).toOpaque(), &handler)
     }
 
+    nonisolated static let signature = OSType(0x474C_5A57) // 'GLZW'
+
     @discardableResult
     public func register(keyCode: UInt32, modifiers: UInt32) -> Bool {
         if let ref { UnregisterEventHotKey(ref) }
         ref = nil
-        let id = EventHotKeyID(signature: OSType(0x474C_5A57), id: 1) // 'GLZW'
-        return RegisterEventHotKey(keyCode, modifiers, id, GetApplicationEventTarget(), 0, &ref) == noErr
+        return RegisterEventHotKey(keyCode, modifiers, EventHotKeyID(signature: Self.signature, id: id), GetApplicationEventTarget(), 0, &ref) == noErr
     }
 
     public static func carbonModifiers(_ f: NSEvent.ModifierFlags) -> UInt32 {
