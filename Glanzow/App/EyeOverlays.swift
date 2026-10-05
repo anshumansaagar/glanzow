@@ -6,7 +6,7 @@ import GlanzowKit
 /// away, and it finishes on its own. Never takes focus; only "Later" is clickable.
 @MainActor final class EyeBreakPill {
     private var panel: NSPanel?
-    private var host: NSHostingView<PillView>?
+    private var host: FirstClickHostingView<PillView>?
     var onLater: (() -> Void)?
 
     func show(progress: Double) {
@@ -17,7 +17,7 @@ import GlanzowKit
             p.backgroundColor = .clear
             p.hasShadow = true
             p.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
-            let h = NSHostingView(rootView: PillView(progress: progress, done: false, later: { [weak self] in self?.onLater?() }))
+            let h = FirstClickHostingView(rootView: PillView(progress: progress, done: false, later: { [weak self] in self?.onLater?() }))
             p.contentView = h
             panel = p
             host = h
@@ -89,6 +89,11 @@ private struct PillView: View {
         .background(.regularMaterial, in: Capsule())
         .padding(8) // room for the shadow
     }
+}
+
+/// The pill's panel never becomes key, so without this its first click would only focus it.
+final class FirstClickHostingView<Content: View>: NSHostingView<Content> {
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 }
 
 /// Privacy guard: frosted glass over every screen, drawn by the window server from what's
