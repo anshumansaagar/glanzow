@@ -32,15 +32,22 @@ import GlanzowKit
         model.previewLive()
         for dark in [false, true] {
             // The popover supplies the backdrop in the app; recreate it for the render.
-            let backdrop = NSVisualEffectView()
-            backdrop.material = .popover
-            backdrop.state = .active
-            backdrop.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
+            // Offscreen there is no desktop behind it, so give the material one to blend with.
             let panel = NSHostingView(rootView: GlancePanel(model: model))
             let size = panel.fittingSize
+            let desk = NSView(frame: CGRect(origin: .zero, size: size))
+            desk.wantsLayer = true
+            desk.layer?.backgroundColor = (dark ? NSColor(srgbRed: 0.10, green: 0.09, blue: 0.19, alpha: 1) : NSColor(srgbRed: 0.91, green: 0.90, blue: 0.95, alpha: 1)).cgColor
+            let backdrop = NSVisualEffectView(frame: desk.bounds)
+            backdrop.material = .popover
+            backdrop.blendingMode = .withinWindow
+            backdrop.state = .active
+            backdrop.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
+            desk.appearance = backdrop.appearance
             panel.frame = CGRect(origin: .zero, size: size)
-            backdrop.addSubview(panel)
-            save(backdrop, size: size, dir.appending(path: dark ? "panel-dark.png" : "panel.png"))
+            desk.addSubview(backdrop)
+            desk.addSubview(panel)
+            save(desk, size: size, dir.appending(path: dark ? "panel-dark.png" : "panel.png"))
         }
         for (name, style) in [("following", Glyph.Style.following), ("holding", .holding), ("faint", .faint), ("attention", .attention), ("learning", .learning)] {
             let icon = NSImageView(image: Glyph.image(style, description: name))
