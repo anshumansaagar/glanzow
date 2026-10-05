@@ -28,7 +28,10 @@ struct PaneKeys {
         return dy > 0 ? 125 : 126                            // down : up
     }
 
-    func move(toward target: CGPoint, from: CGPoint, pid: pid_t) {
+    static func name(_ arrow: CGKeyCode) -> String { [123: "left", 124: "right", 125: "down", 126: "up"][arrow] ?? "\(arrow)" }
+
+    @discardableResult
+    func move(toward target: CGPoint, from: CGPoint, pid: pid_t) -> CGKeyCode {
         let arrow = Self.arrow(toward: target, from: from)
         switch style {
         case .optionCommandArrow:
@@ -40,6 +43,7 @@ struct PaneKeys {
         case .controlShiftArrow:
             Self.post(arrow, [.maskControl, .maskShift], to: pid)
         }
+        return arrow
     }
 
     /// Delivered to that one process (CGEventPostToPid), never into the system-wide stream, and

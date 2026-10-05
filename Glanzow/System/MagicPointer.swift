@@ -10,7 +10,10 @@ public enum MagicPointer {
     public static func target(pointer p: CGPoint, gaze: CGPoint?, faced: DisplayInfo?, pointerDisplay: DisplayInfo?,
                               lastOnFaced: CGPoint?) -> CGPoint? {
         guard let faced else { return nil }
-        if let g = gaze, faced.bounds.contains(g) {
+        // The gaze map may land a little past the screen's edge; the screen itself is known.
+        let inner = faced.bounds.insetBy(dx: 20, dy: 20)
+        if let raw = gaze {
+            let g = CGPoint(x: min(max(raw.x, inner.minX), inner.maxX), y: min(max(raw.y, inner.minY), inner.maxY))
             // Only worth it when the pointer is far from where the user looks.
             return hypot(g.x - p.x, g.y - p.y) > max(260, faced.bounds.width * 0.2) ? g : nil
         }

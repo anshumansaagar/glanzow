@@ -18,6 +18,8 @@ public final class PerfMeter: @unchecked Sendable {
         var layoutNs: UInt64 = 0
         var axEvents = 0
         var mouseEvents = 0
+        /// Where within-screen switching stops, step by step (SwitchController).
+        var region: [String: Int] = [:]
     }
     private let counters = OSAllocatedUnfairLock(initialState: Counters())
     private let last = OSAllocatedUnfairLock(initialState: (cpu: PerfMeter.processCPUSeconds(), wall: now()))
@@ -41,6 +43,7 @@ public final class PerfMeter: @unchecked Sendable {
     public func layout(_ ns: UInt64) { counters.withLock { $0.layouts += 1; $0.layoutNs += ns } }
     public func axEvent() { counters.withLock { $0.axEvents += 1 } }
     public func mouseEvent() { counters.withLock { $0.mouseEvents += 1 } }
+    public func note(_ step: String) { counters.withLock { $0.region[step, default: 0] += 1 } }
 
     /// Everything since the previous report, then resets.
     public func report() -> [String: Any] {
@@ -62,6 +65,7 @@ public final class PerfMeter: @unchecked Sendable {
             "layoutMs": ms(c.layoutNs, c.layouts),
             "axEvents": c.axEvents,
             "mouseEvents": c.mouseEvents,
+            "region": c.region,
             "memoryMB": Self.footprintMB(),
         ]
     }

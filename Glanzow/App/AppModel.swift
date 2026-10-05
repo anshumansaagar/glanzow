@@ -381,8 +381,10 @@ import GlanzowKit
     private func applySettings() {
         // FR-P2-01 needs eye offsets, but only when there is more than one window or pane to pick
         // from; landmarks are the costliest step. Every frame while calibrating, every other otherwise.
+        // Pointer-follow needs them all the time: the pointer can jump anywhere on any screen.
         tracker.configure(smoothing: SmoothingParams(defaults),
-                          trackPupils: defaults.bool(forKey: Pref.trackPupils) || calibrating || (eyesNeeded && defaults.bool(forKey: Pref.focusWithinScreen)),
+                          trackPupils: defaults.bool(forKey: Pref.trackPupils) || calibrating || defaults.bool(forKey: Pref.magicPointer)
+                              || (eyesNeeded && defaults.bool(forKey: Pref.focusWithinScreen)),
                           pupilStride: calibrating ? 1 : 2)
         layoutPoke?.yield(())
         let tuning = Tuning(defaults)
@@ -605,9 +607,15 @@ import GlanzowKit
             var faced: DisplayKey?
             if case .candidate(let k)? = snap.classification { faced = k }
             if case .stay? = snap.classification { faced = snap.current }
-            guard let key = faced, let d = registry.display(key),
-                  let target = MagicPointer.target(pointer: p, gaze: key == snap.current ? snap.gaze : nil, faced: d,
-                                                   pointerDisplay: registry.display(at: p), lastOnFaced: input.lastPointer(on: key))
+            guard let key = faced, let d = registry.display(key) else { return }
+            // From the latest frame and the faced screen's own gaze map, so it works on any
+            // screen, with one window or many (the switcher's gaze point exists only for regions).
+            let gaze = lastSample.flatMap { s -> CGPoint? in
+                guard t - s.timestamp < 0.5, let g = classifier.gazePoint(s, on: key) else { return nil }
+                return CGPoint(x: d.bounds.minX + g.x * d.bounds.width, y: d.bounds.minY + g.y * d.bounds.height)
+            }
+            guard let target = MagicPointer.target(pointer: p, gaze: gaze, faced: d, pointerDisplay: registry.display(at: p),
+                                                   lastOnFaced: input.lastPointer(on: key))
             else { return }
             lastPointerJump = t
             input.noteWarp(to: target)

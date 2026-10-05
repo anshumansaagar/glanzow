@@ -76,6 +76,11 @@ final class EyeFeatureTests: XCTestCase {
         XCTAssertNil(near)
     }
 
+    func test_aGazePointPastTheEdgeStillJumpsJustInsideTheFacedScreen() {
+        let t = MagicPointer.target(pointer: CGPoint(x: 100, y: 100), gaze: CGPoint(x: 1990, y: 1130), faced: left, pointerDisplay: left, lastOnFaced: nil)
+        XCTAssertEqual(t, CGPoint(x: 1900, y: 1060))
+    }
+
     func test_pointerCrossesToTheFacedScreenWithoutAGazePoint() {
         let t = MagicPointer.target(pointer: CGPoint(x: 100, y: 100), gaze: nil, faced: right, pointerDisplay: left, lastOnFaced: CGPoint(x: 2500, y: 300))
         XCTAssertEqual(t, CGPoint(x: 2500, y: 300))

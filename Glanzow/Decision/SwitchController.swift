@@ -164,22 +164,26 @@ public actor SwitchController {
             return
         }
         // A blink leaves the frame without an eye reading: skip it rather than mix in the cruder
-        // head-only estimate, which would widen the fixation's spread.
-        if classifier.expectsEyes(on: cur), s.pupilOffset == nil { return }
+        // head-only estimate, which would widen the fixation's spread. The gaze is unknown then.
+        if classifier.expectsEyes(on: cur), s.pupilOffset == nil { gaze = nil; return }
         let p = CGPoint(x: layout.bounds.minX + g.x * layout.bounds.width, y: layout.bounds.minY + g.y * layout.bounds.height)
         gaze = p
+        PerfMeter.shared.note("gaze")
         fixation.duration = tuning.regionDwell
         fixation.dispersion = tuning.regionDispersion * layout.bounds.width
         guard let centre = fixation.add(p, at: t) else { return }
+        PerfMeter.shared.note("fixation")
         let margin = tuning.regionMargin * layout.bounds.width
         let focusedRegion = layout.focusedRegion
         if let r = focusedRegion, r.frame.insetBy(dx: -margin, dy: -margin).contains(centre) { // hysteresis
+            PerfMeter.shared.note("onFocused")
             regionPending = nil
             return
         }
         guard let target = layout.region(at: centre, inset: margin / 2), target.id != layout.focused,
               // Looking at a pane's own window chrome (tab bar, title) keeps the pane.
               !(focusedRegion.map { !target.isPane && $0.windowID == target.windowID } ?? false) else {
+            PerfMeter.shared.note("noTarget")
             regionPending = nil
             return
         }
@@ -188,16 +192,19 @@ public actor SwitchController {
             if s.target != target.id { suppressed = nil }
         }
         regionPending = target.id
+        PerfMeter.shared.note("target")
         guard t >= retryAfter, !inFlight else { return }
-        if t - input.lastMouseActivity < tuning.mouseQuiet { blockedBy = "mouse"; return }
+        if t - input.lastMouseActivity < tuning.mouseQuiet { blockedBy = "mouse"; PerfMeter.shared.note("mouse"); return }
         // FR-P2-04: while typing, windows and panes stay put. No sustained-look override here.
-        if let pause = tuning.typingPause, t - input.lastKeystroke < pause { blockedBy = "typing"; return }
+        if let pause = tuning.typingPause, t - input.lastKeystroke < pause { blockedBy = "typing"; PerfMeter.shared.note("typing"); return }
         if let reason = await systemBlock() {
+            PerfMeter.shared.note("system")
             blockedBy = reason
             retryAfter = t + 0.25
             return
         }
         guard !paused, regionPending == target.id, current == cur, self.layout?.focused != target.id, !inFlight else { return }
+        PerfMeter.shared.note("attempt")
         inFlight = true
         defer { inFlight = false }
         let started = now()
