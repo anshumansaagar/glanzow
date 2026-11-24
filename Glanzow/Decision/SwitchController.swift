@@ -44,6 +44,7 @@ public actor SwitchController {
     private var pending: DisplayKey?
     private var pendingSince = 0.0
     private var lastFace = -Double.infinity
+    private var lastPose: PoseSample?
     private var lastTime = 0.0
     private var noFace = true
     private var paused = true // the app un-pauses once permissions, camera and calibration are ready
@@ -112,19 +113,30 @@ public actor SwitchController {
             noFace = false
             let c = classifier.classify(s, current: current)
             latest = c
+            // A head still turning is passing over screens on its way somewhere (the phone, a
+            // person), not looking at them: the settle time only counts once it slows down.
+            let moving = lastPose.map { p in
+                let d = s.angles - p.angles, dt = s.timestamp - p.timestamp
+                return dt > 0 && (d.x * d.x + d.y * d.y).squareRoot() / dt > tuning.settleSpeed
+            } ?? false
+            lastPose = s
             guard !paused else { return }
             switch c {
             case .offScreen:
                 // SPEC: §6.3 says only "do nothing" for off-screen. A glance at the phone also
-                // restarts the dwell, so a turn interrupted by looking away must settle again.
+                // restarts the dwell, so a turn interrupted by looking away must settle again,
+                // and the window or pane choice starts over from fresh gaze points.
                 pending = nil
+                regionPending = nil
+                gaze = nil
+                fixation.reset()
             case .stay:
                 if let current {
-                    await consider(current, at: s.timestamp)
+                    await consider(current, at: s.timestamp, moving: moving)
                     await considerRegion(s)
                 }
             case .candidate(let d):
-                await consider(d, at: s.timestamp)
+                await consider(d, at: s.timestamp, moving: moving)
                 if d == current {
                     await considerRegion(s)
                 } else {
@@ -135,8 +147,8 @@ public actor SwitchController {
         }
     }
 
-    private func consider(_ d: DisplayKey, at t: TimeInterval) async {
-        if d != pending {
+    private func consider(_ d: DisplayKey, at t: TimeInterval, moving: Bool) async {
+        if d != pending || moving {
             pending = d
             pendingSince = t
             blockedBy = nil

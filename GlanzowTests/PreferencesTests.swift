@@ -10,7 +10,7 @@ final class PreferencesTests: XCTestCase {
         XCTAssertEqual(t.hysteresisFactor, 1.4, accuracy: 1e-9) // FR-CLS-03: 50% on a 1.2–1.6 scale
         XCTAssertEqual(t.typingPause, 3.0)
         XCTAssertEqual(t.mouseQuiet, 1.5)
-        XCTAssertEqual(t.rejectThreshold, 4.0)
+        XCTAssertEqual(t.rejectThreshold, 3.0) // SPEC deviation, see Tuning.rejectThreshold
         XCTAssertFalse(t.confirmMode)
     }
 

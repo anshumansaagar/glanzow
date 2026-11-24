@@ -56,8 +56,8 @@ import GlanzowKit
         }
         menuBar(dir.appending(path: "menubar.png"))
         save(FocusFeedback.preview(), size: CGSize(width: 900, height: 360), dir.appending(path: "flash.png"))
-        save(FocusFeedback.spotlightPreview(strength: 0.22), size: CGSize(width: 960, height: 600), dir.appending(path: "spotlight-first.png"))
-        save(FocusFeedback.spotlightPreview(strength: 0.14), size: CGSize(width: 960, height: 600), dir.appending(path: "spotlight-seasoned.png"))
+        save(FocusFeedback.washPreview(wholeScreen: true), size: CGSize(width: 960, height: 600), dir.appending(path: "wash-screen.png"))
+        save(FocusFeedback.washPreview(wholeScreen: false), size: CGSize(width: 960, height: 600), dir.appending(path: "wash-window.png"))
         let pill = EyeOverlayPreviews.pill(progress: 0.35)
         save(pill, size: pill.fittingSize, dir.appending(path: "eye-break.png"))
         save(EyeOverlayPreviews.veil(), size: CGSize(width: 900, height: 420), dir.appending(path: "privacy-veil.png"))

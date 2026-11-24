@@ -225,20 +225,20 @@ struct EyesSettings: View {
 // MARK: Look & feel
 
 struct FeelSettings: View {
-    @AppStorage(Pref.feedbackStyle) private var style = "spotlight"
+    @AppStorage(Pref.feedbackStyle) private var style = "wash"
     @AppStorage(Pref.showActiveBorder) private var border = false
 
     var body: some View {
         Form {
             Section {
                 Picker("When focus moves", selection: $style) {
-                    Text("Spotlight the window").tag("spotlight")
+                    Text("Flash where focus lands").tag("wash")
                     Text("Glow around the window").tag("ring")
                     Text("Nothing").tag("none")
                 }
                 .pickerStyle(.radioGroup)
             } footer: {
-                Footnote("Spotlight briefly dims everything around the window that now has focus, so it reads on light and dark windows alike.")
+                Footnote("Moving to another screen washes that screen in warm light for a moment; moving between windows or panes on one screen washes just the one that took focus.")
             }
             Section {
                 Toggle("Keep a border on the focused window", isOn: $border)
@@ -450,7 +450,7 @@ struct AdvancedSettings: View {
     @AppStorage(Pref.minCutoff) private var minCutoff = 1.0
     @AppStorage(Pref.beta) private var beta = 0.05
     @AppStorage(Pref.dCutoff) private var dCutoff = 1.0
-    @AppStorage(Pref.rejectThreshold) private var rejectThreshold = 4.0
+    @AppStorage(Pref.rejectThreshold) private var rejectThreshold = 3.0
     @AppStorage(Pref.trackPupils) private var trackPupils = false
     @AppStorage(Pref.showDebugOverlay) private var showOverlay = false
 

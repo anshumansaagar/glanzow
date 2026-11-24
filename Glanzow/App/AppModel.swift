@@ -224,7 +224,7 @@ import GlanzowKit
             }
             await controller.setOnSwitch { [weak self] r in Task { @MainActor in self?.didSwitch(r) } }
             await focusManager.setCallbacks(
-                onFocused: { [weak self] rect in Task { @MainActor in self?.focused(rect) } },
+                onFocused: { [weak self] rect, area in Task { @MainActor in self?.focused(rect, area: area) } },
                 onAXDisabled: { [weak self] in Task { @MainActor in self?.accessibilityLost() } })
             await windows.setCallbacks(
                 onFocus: { [weak self] key, ref in
@@ -547,16 +547,15 @@ import GlanzowKit
         log.info("switch → \(r.to, privacy: .public) settle-to-focus \(Int((t - r.pendingSince) * 1000)) ms")
     }
 
-    /// FR-UI-03, as the user's chosen feedback. The spotlight is clear for the first 50 switches,
-    /// then lighter: once you trust it, it should barely be noticed.
-    private func focused(_ rect: CGRect) {
-        switch defaults.string(forKey: Pref.feedbackStyle) ?? "spotlight" {
+    /// FR-UI-03, as the user's chosen feedback. `area` is what the wash covers: the whole screen
+    /// after a move between screens, the window or pane itself within one.
+    private func focused(_ rect: CGRect, area: CGRect) {
+        switch defaults.string(forKey: Pref.feedbackStyle) ?? "wash" {
         case "none": break
         case "ring": feedback.flash(rect)
-        default:
-            guard let d = registry.display(containing: rect) else { return feedback.flash(rect) }
-            let seasoned = defaults.integer(forKey: Pref.switchesTotal) > 50
-            feedback.spotlight(rect, on: d.bounds, strength: seasoned ? 0.14 : 0.24)
+        default: // "wash", and "spotlight" from before the wash replaced it
+            guard let d = registry.display(containing: area) else { return feedback.flash(rect) }
+            feedback.wash(rect, over: area, on: d.bounds)
         }
     }
 

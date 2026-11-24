@@ -167,7 +167,9 @@ Each step is a published, widely used method rather than an invention:
    head; a jumping one is looked at eyes-first, the way you look at things in real use, so it is
    what teaches the up-and-down role of the eyes.
 2. **Which screen**: each frame is matched to the nearest screen's cluster. A pose far from every
-   screen (phone, desk) does nothing. A new screen must win for the settle time.
+   screen (phone, desk, someone beside you) pauses switching until you look back. A new screen
+   must win for the settle time, counted once your head slows down, so a head sweeping past a
+   screen on its way somewhere else doesn't switch to it.
 3. **Where on the screen**: the gaze map turns head and eye angles into a point. When your eyes
    rest (a fixation of about half a second) clearly inside another window or pane, focus moves
    there. Panes are focused through Accessibility, or with the app's own pane shortcut when it
@@ -175,8 +177,8 @@ Each step is a published, widely used method rather than an invention:
 4. **Never interrupting**: nothing moves while you type (screens allow a deliberate one-second
    look to override; windows and panes never do), use the mouse, or have a menu, dialog, sheet,
    password field, screenshot tool or Mission Control open, or while an excluded app is in front.
-5. **Feedback**: a brief spotlight dims everything around the newly focused window. It is clear
-   for your first 50 switches and lighter after that.
+5. **Feedback**: a brief warm wash: over the whole screen when focus arrives from another screen,
+   over just the window or pane when it moves within one, with a gold border on what took focus.
 6. **Learning**: clicks refine the gaze map and the screen clusters; undos and quick returns
    tune the settle time.
 

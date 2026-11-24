@@ -48,7 +48,7 @@ public enum Pref {
     public static let undoHotkeyLabel = "undoHotkeyLabel"
     public static let eyeBreaks = "eyeBreaks"           // 20-20-20 reminders, finished by looking away
     public static let privacyGuard = "privacyGuard"     // veil the screens when someone else watches
-    public static let feedbackStyle = "feedbackStyle"   // spotlight, ring, none
+    public static let feedbackStyle = "feedbackStyle"   // wash (default), ring, none
     public static let statsDay = "statsDay"
     public static let statsSwitches = "statsSwitches"
     public static let statsUndos = "statsUndos"
@@ -91,7 +91,7 @@ public enum Pref {
         undoHotkeyLabel: "⌃⌥Z",
         eyeBreaks: false,
         privacyGuard: false,
-        feedbackStyle: "spotlight",
+        feedbackStyle: "wash",
         excludedApps: [String](),
         showActiveBorder: false,
         confirmMode: false,
@@ -106,7 +106,7 @@ public enum Pref {
         minCutoff: 1.0,
         beta: 0.05,
         dCutoff: 1.0,
-        rejectThreshold: 4.0,
+        rejectThreshold: 3.0,         // see Tuning.rejectThreshold
         // SPEC: FR-TRK-03 is a Should and V1 classification never reads pupils, so landmarks
         // (the most expensive Vision request) stay off by default to protect NFR-04 CPU.
         trackPupils: false,
@@ -123,7 +123,13 @@ func clamp<T: Comparable>(_ x: T, _ lo: T, _ hi: T) -> T { min(max(x, lo), hi) }
 public struct Tuning: Sendable, Equatable {
     public var dwell: TimeInterval = 0.3               // FR-CLS-04
     public var hysteresisFactor = 1.4                   // FR-CLS-03 (default 50%)
-    public var rejectThreshold = 4.0                    // FR-CLS-02
+    /// FR-CLS-02. SPEC: the spec's 4.0 let the phone, the desk and people nearby read as the
+    /// nearest screen (head 19° below the laptop's middle, or up to 60° to the side, still counted).
+    /// 3.0 still accepted 447 of 450 real clicks on the developer's three screens.
+    public var rejectThreshold = 3.0
+    /// Head speed (degrees per second) above which the head is passing over screens, not resting
+    /// on one: the settle time waits. A still head's jitter stays well under it.
+    public var settleSpeed = 40.0
     public var typingPause: TimeInterval? = 3.0         // FR-SAF-01; nil = "Wait while typing" off
     public var typingOverride: TimeInterval = 1.0       // FR-SAF-01 sustained-turn override
     public var mouseQuiet: TimeInterval = 1.5           // FR-SAF-02

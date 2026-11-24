@@ -30,60 +30,67 @@ import GlanzowKit
     private let flashPanel = FocusFeedback.panel(level: .screenSaver, rings: flashRings)
     private let activePanel = FocusFeedback.panel(level: .floating, rings: activeRings)
     private var flashGeneration = 0
-    private var spotlightPanel: NSPanel?
-    private var spotlightGeneration = 0
+    private var washPanel: NSPanel?
+    private var washGeneration = 0
+    /// The wash lies over what you are about to read, so it stays light: 60% was too strong.
+    private static let washStrength: CGFloat = 0.35
 
-    /// "Spotlight": for a moment everything on the display except the newly focused window (or
-    /// pane) dims, so the eye lands on it whatever its colours — a white page included — and
-    /// nothing is drawn on the content itself. `strength` is the dimming at its peak.
-    func spotlight(_ rect: CGRect, on display: CGRect, strength: CGFloat) {
-        let panel = spotlightPanel ?? {
+    /// "Wash": for a moment the gleam washes over `area` (the whole screen after a move between
+    /// screens, or just the window or pane that took focus within one) and the gold border marks
+    /// `rect`, what took focus. Warm light reads on a white page and a dark editor alike.
+    func wash(_ rect: CGRect, over area: CGRect, on display: CGRect) {
+        let panel = washPanel ?? {
             let p = DebugOverlay.clickThroughPanel()
             p.level = .screenSaver
             p.backgroundColor = .clear
             let v = NSView()
             v.wantsLayer = true
-            let shade = CAShapeLayer()
-            shade.fillRule = .evenOdd
-            v.layer?.addSublayer(shade)
+            v.layer?.addSublayer(CAShapeLayer())
             for r in Self.activeRings { v.layer?.addSublayer(Self.layer(r)) }
             p.contentView = v
-            spotlightPanel = p
+            washPanel = p
             return p
         }()
         let frame = cocoaRect(display)
         panel.setFrame(frame, display: false)
-        let local = CGRect(x: rect.minX - display.minX, y: display.maxY - rect.maxY, width: rect.width, height: rect.height) // flip into the view
-            .intersection(CGRect(origin: .zero, size: frame.size))
+        let bounds = CGRect(origin: .zero, size: frame.size)
+        func local(_ r: CGRect) -> CGRect { // flip into the view
+            CGRect(x: r.minX - display.minX, y: display.maxY - r.maxY, width: r.width, height: r.height).intersection(bounds)
+        }
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         if let layers = panel.contentView?.layer?.sublayers, let shade = layers.first as? CAShapeLayer {
-            shade.frame = CGRect(origin: .zero, size: frame.size)
-            let path = CGMutablePath()
-            path.addRect(shade.frame)
-            path.addPath(CGPath(roundedRect: local, cornerWidth: 11, cornerHeight: 11, transform: nil))
-            shade.path = path
-            shade.fillColor = NSColor.black.withAlphaComponent(strength).cgColor
-            Self.layout(Array(layers.dropFirst()), around: local)
+            shade.frame = bounds
+            shade.path = Self.washPath(local(area), in: bounds)
+            shade.fillColor = Palette.gleam.withAlphaComponent(Self.washStrength).cgColor
+            Self.layout(Array(layers.dropFirst()), around: local(rect))
         }
         CATransaction.commit()
-        spotlightGeneration += 1
-        let generation = spotlightGeneration
+        washGeneration += 1
+        let generation = washGeneration
         panel.alphaValue = 0
         panel.orderFrontRegardless()
         NSAnimationContext.runAnimationGroup { $0.duration = 0.08; panel.animator().alphaValue = 1 }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
             MainActor.assumeIsolated {
-                guard let self, generation == self.spotlightGeneration else { return }
+                guard let self, generation == self.washGeneration else { return }
                 NSAnimationContext.runAnimationGroup { ctx in
                     ctx.duration = 0.4
                     ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
                     panel.animator().alphaValue = 0
                 } completionHandler: {
-                    MainActor.assumeIsolated { if generation == self.spotlightGeneration { panel.orderOut(nil) } }
+                    MainActor.assumeIsolated { if generation == self.washGeneration { panel.orderOut(nil) } }
                 }
             }
         }
+    }
+
+    /// A whole screen gets square edges; a window or pane gets the window's rounded corners.
+    private static func washPath(_ area: CGRect, in bounds: CGRect) -> CGPath {
+        if area.isEmpty { return CGMutablePath() }
+        if area == bounds { return CGPath(rect: area, transform: nil) }
+        let r = min(11, area.width / 2, area.height / 2) // CGPath rejects corners wider than half the rect
+        return CGPath(roundedRect: area, cornerWidth: r, cornerHeight: r, transform: nil)
     }
 
     func flash(_ rect: CGRect) {
@@ -161,8 +168,9 @@ import GlanzowKit
     }
 
     #if DEBUG
-    /// The spotlight on a mock desktop: a white browser window focused beside a dark editor.
-    static func spotlightPreview(strength: CGFloat) -> NSView {
+    /// The wash on a mock desktop: a white page focused beside a dark editor. `wholeScreen`: focus
+    /// arrived from another screen; otherwise it moved between the two windows on this one.
+    static func washPreview(wholeScreen: Bool) -> NSView {
         let size = CGSize(width: 960, height: 600)
         let v = NSView(frame: CGRect(origin: .zero, size: size))
         v.wantsLayer = true
@@ -182,12 +190,8 @@ import GlanzowKit
             b.backgroundColor = NSColor(white: 0.82, alpha: 1).cgColor; b.cornerRadius = 4; v.layer?.addSublayer(b)
         }
         let shade = CAShapeLayer()
-        shade.fillRule = .evenOdd
-        let path = CGMutablePath()
-        path.addRect(v.bounds)
-        path.addPath(CGPath(roundedRect: page.frame, cornerWidth: 11, cornerHeight: 11, transform: nil))
-        shade.path = path
-        shade.fillColor = NSColor.black.withAlphaComponent(strength).cgColor
+        shade.path = washPath(wholeScreen ? v.bounds : page.frame, in: v.bounds)
+        shade.fillColor = Palette.gleam.withAlphaComponent(washStrength).cgColor
         v.layer?.addSublayer(shade)
         let rings = activeRings.map(layer)
         rings.forEach { v.layer?.addSublayer($0) }

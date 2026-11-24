@@ -42,8 +42,9 @@ extension Array {
     private let input: EventTapInputMonitor
     private let ownPID = ProcessInfo.processInfo.processIdentifier
     private let log = logger("focus")
-    /// Frame (global coordinates) of what was just focused, for the flash border.
-    private var onFocused: (@Sendable (CGRect) -> Void)?
+    /// What was just focused, and the area to wash (global coordinates): its whole screen after a
+    /// move between screens, the window or pane itself within one.
+    private var onFocused: (@Sendable (CGRect, CGRect) -> Void)?
     private var onAXDisabled: (@Sendable () -> Void)?
 
     nonisolated public init(windows: WindowTracker, displays: DisplayRegistry, input: EventTapInputMonitor) {
@@ -52,7 +53,7 @@ extension Array {
         self.input = input
     }
 
-    public func setCallbacks(onFocused: @escaping @Sendable (CGRect) -> Void, onAXDisabled: @escaping @Sendable () -> Void) {
+    public func setCallbacks(onFocused: @escaping @Sendable (CGRect, CGRect) -> Void, onAXDisabled: @escaping @Sendable () -> Void) {
         self.onFocused = onFocused
         self.onAXDisabled = onAXDisabled
     }
@@ -70,7 +71,7 @@ extension Array {
             // FR-FOC-05: an empty display gets the pointer only, so new windows and Spaces follow.
             guard options.movePointer else { return .skipped("no window") }
             warp(to: input.lastPointer(on: key) ?? CGPoint(x: d.bounds.midX, y: d.bounds.midY))
-            onFocused?(d.bounds)
+            onFocused?(d.bounds, d.bounds)
             return .pointerOnly
         }
         // Some layer-0 windows have no AX counterpart (invisible helpers, some Electron shells);
@@ -106,7 +107,7 @@ extension Array {
             let last = input.lastPointer(on: key).flatMap { visible.contains($0) ? $0 : nil }
             warp(to: last ?? CGPoint(x: visible.midX, y: visible.midY))
         }
-        onFocused?(info.bounds)
+        onFocused?(info.bounds, d.bounds)
         return .focusedWindow
     }
 
@@ -308,7 +309,7 @@ extension Array {
             let last = displays.display(containing: r.frame).flatMap { input.lastPointer(on: $0.key) }.flatMap { r.frame.contains($0) ? $0 : nil }
             warp(to: last ?? CGPoint(x: r.frame.midX, y: r.frame.midY))
         }
-        onFocused?(r.frame)
+        onFocused?(r.frame, r.frame)
         return outcome
     }
 

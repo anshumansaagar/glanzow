@@ -111,6 +111,25 @@ final class SwitchControllerTests: XCTestCase {
                                .look(from: 21, to: 45, yaw: 30)]), [(26.0 / 15, "R")])
     }
 
+    /// Turning to the phone or a person sweeps the head past a screen: not a look at it.
+    func test_sweepPastAScreenDoesNotSwitch() async {
+        // 4° a frame (60°/s) through R's zone (yaw 18…54), then off-screen at yaw 70.
+        let sweep: [Step] = (15..<30).map { .look(from: $0, to: $0 + 1, yaw: Double($0 - 15) * 4) }
+        assertCalls(await run(sweep + [.look(from: 30, to: 60, yaw: 70)]), [])
+    }
+
+    func test_turnThatStopsOnAScreenSwitchesOnceSettled() async {
+        // Sweeping until yaw 28 (frame 22), then still on R: the settle time counts from frame 22.
+        let turn: [Step] = (15..<23).map { .look(from: $0, to: $0 + 1, yaw: Double($0 - 15) * 4) }
+        assertCalls(await run(turn + [.look(from: 23, to: 60, yaw: 30)]), [(27.0 / 15, "R")])
+    }
+
+    /// A still head jitters a little (2° a frame here, 30°/s): that is not a sweep.
+    func test_jitteryHeadOnAScreenStillSwitches() async {
+        let jitter: [Step] = (15..<45).map { .look(from: $0, to: $0 + 1, yaw: $0 % 2 == 0 ? 29 : 31) }
+        assertCalls(await run(jitter), [(20.0 / 15, "R")])
+    }
+
     func test_FR_SAF_01_typingBlocksUntilASustainedOneSecondTurn() async {
         // Typed at 0.9 s; facing R from 1.0 s. Typing guard lasts until 3.9 s, but holding the
         // turn for 1 s overrides it at 2.0 s (frame 30).
@@ -244,6 +263,15 @@ extension RegionSwitchTests {
         let steps: [SwitchControllerTests.Step] = (15..<60).map { .look(from: $0, to: $0 + 1, yaw: $0 % 2 == 0 ? -1.6 : 1.6) }
         let calls = await harness.runForTests(steps, layout: layout)
         XCTAssertTrue(calls.isEmpty, "\(calls)")
+    }
+
+    /// Looking away throws out the half-made choice: back from the phone, the eyes need a fresh
+    /// fixation, not one stitched from points seen before looking away.
+    func test_lookingAwayStartsTheWindowChoiceOver() async {
+        let calls = await harness.runForTests([.look(from: 15, to: 20, yaw: 8), .look(from: 20, to: 30, yaw: 0, pitch: -40),
+                                               .look(from: 30, to: 60, yaw: 8)], layout: layout)
+        XCTAssertEqual(calls.map(\.d), ["@w2"])
+        XCTAssertEqual(calls.first?.t ?? 0, 37.0 / 15, accuracy: 1e-9) // 0.45 s from frame 30
     }
 
     /// Jitter well inside the other window still switches after one fixation.
