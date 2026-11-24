@@ -151,7 +151,9 @@ The switch log and recordings hold numbers and display IDs only, never images.
   different settings, without sitting at the desk:
 
   ```sh
-  make replay FILE=~/Library/Application\ Support/Glanzow/Recordings/pose-….json ARGS="--dwell 400 --head-turn 0.7"
+  make replay \
+    FILE=~/Library/Application\ Support/Glanzow/Recordings/pose-….json \
+    ARGS="--dwell 400 --head-turn 0.7"
   swift run ReplayCLI --help
   ```
 
@@ -163,9 +165,19 @@ The switch log and recordings hold numbers and display IDs only, never images.
 ## How it works
 
 ```
-camera ─▶ face pose (Vision) ─▶ iris centres ─▶ smoothing ─▶ which screen ─▶ where on it ─▶ focus
-          yaw, pitch, roll     (gradients)      (One Euro)   (clusters)       (gaze map +      (raise,
-                                                                              fixation)        warp)
+camera
+  ▼
+face pose        Apple Vision: yaw, pitch, roll
+  ▼
+iris centres     gradient method
+  ▼
+smoothing        One Euro filter
+  ▼
+which screen     nearest cluster
+  ▼
+where on it      gaze map, then a fixation
+  ▼
+focus            raise the window or pane, move the pointer
 ```
 
 Each step is a published, widely used method rather than an invention:
@@ -209,15 +221,16 @@ the choice.
 
 ```
 Glanzow/
-  App/          menu bar and panel, setup, settings, overlays, notifications (the app target)
+  App/          menu bar, panel, setup, settings, overlays (the app target)
   Tracking/     CameraCapture, PoseTracker, IrisLocator, OneEuroFilter
   Calibration/  CalibrationOverlay, CalibrationStore, DisplayModel, GazeMap
-  Decision/     DisplayClassifier, SwitchController, FixationDetector, ScreenLayout, PrivacyGuard
-  System/       DisplayRegistry, InputMonitor, WindowTracker, FocusManager, PaneKeys, AX, Hotkey,
-                EventLog, PerfMeter, Palette, Preferences
+  Decision/     DisplayClassifier, SwitchController, FixationDetector,
+                ScreenLayout, PrivacyGuard
+  System/       DisplayRegistry, InputMonitor, WindowTracker, FocusManager,
+                PaneKeys, AX, Hotkey, EventLog, PerfMeter, Palette, Preferences
   Learning/     LearningEngine, SettleLearner, EyeBreakTimer
   Debug/        DebugOverlay, PoseRecorder
-GlanzowTests/   XCTest suites: filter, classifier, switch timelines, calibration math, learning, …
+GlanzowTests/   XCTest suites for decisions, tracking, calibration and learning
 ReplayCLI/      replays recorded poses through the same decision code
 scripts/        diagnostics, and the app icon drawn in Core Graphics
 ```
