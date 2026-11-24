@@ -57,7 +57,7 @@ Both can be changed in Settings › Shortcuts.
 |---|---|---|
 | Screens | on | Focus moves to the screen you settle on. The settle time adapts to you, between 250 and 600 ms |
 | Windows & panes | on | Within a screen, focus moves to the window or split pane your eyes rest on for about half a second. Panes work in iTerm2, Terminal, Ghostty, kitty, WezTerm, Warp, Zed, Xcode, Sublime Text, VS Code, Cursor, VSCodium and JetBrains IDEs; everywhere else it picks whole windows |
-| Switch feedback | Flash where focus lands | A brief warm wash over the screen, window or pane that just took focus, with a gold border on it. Or a glow around the window, or nothing |
+| Switch feedback | flash | A brief warm wash over the screen, window or pane that just took focus, with a gold border on it ("Flash where focus lands" in Settings). Or a glow around the window, or nothing |
 | Eye breaks | off | After every 20 minutes of screen time, a nudge to look into the distance; it finishes once you have |
 | Privacy guard | off | If someone else watches your screen for 2 seconds, it frosts over until they look away |
 | Camera rest | on | After two minutes with nobody in view and no typing or mouse use, the camera turns off until you're back |
@@ -119,8 +119,10 @@ make app SIGN_ID="Apple Development: Your Name (TEAMID)"
 To run setup again from scratch, or after changing the signing certificate:
 
 ```sh
-make reset-permissions                # forgets the camera, Accessibility and Input Monitoring grants
-defaults delete dev.glanzow.Glanzow   # optional: every setting, including "setup done"
+# Forget the camera, Accessibility and Input Monitoring permissions
+make reset-permissions
+# Optional: erase every setting too, including "setup done"
+defaults delete dev.glanzow.Glanzow
 ```
 
 Input Monitoring is only requested if macOS refuses the keyboard listener with Accessibility alone.
